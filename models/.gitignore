@@ -1,0 +1,118 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.so
+*.dll
+*.dylib
+*.pyd
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environment
+env/
+venv/
+ENV/
+.venv/
+env.bak/
+venv.bak/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Ignore notebooks' checkpoints
+.ipynb_checkpoints
+
+# Ignore Jupyter Notebook outputs
+*.ipynb
+
+# Machine learning checkpoints and models
+checkpoints/
+*.ckpt
+*.h5
+*.pt
+*.onnx
+*.pb
+
+# TensorFlow specific logs and checkpoints
+logs/
+events.out.tfevents.*
+
+# PyTorch Lightning logs
+lightning_logs/
+*.pth
+
+# TensorBoard logs
+tb_logs/
+*.tfevents.*
+
+# Dataset files (can be large)
+data/
+datasets/
+*.csv
+*.json
+*.zip
+*.tar.gz
+
+# Model weights
+weights/
+*.h5
+*.pkl
+*.weights
+
+# Results or output files
+results/
+output/
+*.log
+*.out
+*.txt
+*.csv
+*.tsv
+*.json
+
+# Ignore large binary files or generated files
+*.mp4
+*.avi
+*.mkv
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.tiff
+
+# Environment files
+*.env
+.env.*
+
+# Ignore hidden files
+.DS_Store
+Thumbs.db
+
+# Ignore system files
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Ignore temp files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
