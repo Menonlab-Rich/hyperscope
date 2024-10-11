@@ -9,6 +9,7 @@
 *.bmp
 *.jpg
 *.png
+*.mat
 
 
 # Mac OS-specific storage files
