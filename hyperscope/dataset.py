@@ -16,8 +16,8 @@ app = typer.Typer()
 def main():
     logger.info("Processing dataset...")
     extract_tif(
-        input=RAW_DATA_DIR / "images/*.tif",
-        output= INTERIM_DATA_DIR / "extracted",
+        input_patterns=RAW_DATA_DIR / "images/*.tif",
+        output=INTERIM_DATA_DIR / "extracted",
         normalize=True,
         create_dir=True,
         verify=True,
@@ -26,7 +26,7 @@ def main():
         batch_size=10,
         n_batches=-1,
     )
-    
+
     superpixel(
         image_dir=INTERIM_DATA_DIR / "extracted" / "imgs",
         mask_dir=INTERIM_DATA_DIR / "extracted" / "masks",
@@ -34,31 +34,44 @@ def main():
         multi_process=True,
     )
 
+
 @app.command()
 def extract_tif(
-    input: List[str] = typer.Argument(..., help="Glob pattern to match TIFF files."),
-    output: str = typer.Option(..., "--output", "-o", help="Directory where extracted pages will be saved."),
+    input_patterns: List[str] = typer.Argument(..., help="Glob pattern to match TIFF files."),
+    output: str = typer.Option(
+        ..., "--output", "-o", help="Directory where extracted pages will be saved."
+    ),
     normalize: bool = typer.Option(False, "--normalize", help="Normalize the extracted images."),
-    create_dir: bool = typer.Option(False, "--create-dir", help="Create the output directory if it doesn't exist."),
-    crop: Optional[List[int]] = typer.Option(
-        None, "--crop", help="Remove the specified number of pixels from the edges (left, upper, right, lower)."
+    create_dir: bool = typer.Option(
+        True, "--create-dir", help="Create the output directory if it doesn't exist."
+    ),
+    crop: Optional[str] = typer.Option(
+        None,
+        "--crop",
+        help="Remove the specified number of pixels from the edges (left, upper, right, lower).",
     ),
     verify: bool = typer.Option(False, "--verify", help="Verify the extracted images."),
-    no_confirm: bool = typer.Option(False, "--no-confirm", help="Suppress the confirmation prompt."),
+    no_confirm: bool = typer.Option(
+        False, "--no-confirm", help="Suppress the confirmation prompt."
+    ),
     multi_process: bool = typer.Option(
         True, "--multi-process", help="Use multiple processes to extract images."
     ),
     batch_size: Optional[int] = typer.Option(
         None, "--batch-size", help="Number of images to process in each batch."
     ),
-    n_batches: int = typer.Option(-1, "--n-batches", help="Number of batches to process. -1 for all."),
+    n_batches: int = typer.Option(
+        -1, "--n-batches", help="Number of batches to process. -1 for all."
+    ),
 ):
     """
     Extract pages from TIFF files or NumPy arrays.
     """
-    logger.info(f"Extracting images from: {input}")
+    logger.info(f"Extracting images from: {input_patterns}")
+    if crop is not None:
+        crop = [int(n) for n in crop.split(",")]
     pp_extract_tifs.main(
-        input=input,
+        input_patterns=input_patterns,
         output=output,
         normalize=normalize,
         create_dir=create_dir,
@@ -69,7 +82,6 @@ def extract_tif(
         batch_size=batch_size,
         n_batches=n_batches,
     )
-    
 
 
 @app.command()
@@ -77,7 +89,8 @@ def preprocess_superpixel(
     image_dir: str = typer.Argument(..., help="Directory containing images to process."),
     mask_dir: str = typer.Argument(..., help="Directory containing masks for images."),
     output_dir: str = typer.Argument(..., help="Directory to save superpixel images."),
-    multi_process: bool = typer.Option(False, "--multi-process", help="Use multiple processes."),
+    multi_process: bool = typer.Option(True, "--multi-process", help="Use multiple processes."),
+    batch_size: int = typer.Option(25, "--batch-size", help="Size of batches if multiprocessing")
 ):
     """
     Apply superpixel segmentation to images.
@@ -88,7 +101,9 @@ def preprocess_superpixel(
         mask_dir=mask_dir,
         output_dir=output_dir,
         mp=multi_process,
+        batch_size=batch_size,
     )
+
 
 if __name__ == "__main__":
     app()

@@ -10,95 +10,70 @@ from traceback import print_exception
 from tqdm import tqdm
 from glob import glob
 from hyperscope.config import logger
+from cv2 import imread, IMREAD_UNCHANGED
 
 
 def process_file(img, mask, unique_id, patch_size):
-    '''
-    Process a single image/mask pair, cropping and splitting them into patches
-    of the specified size. Patches with too few non-zero pixels are skipped.
-    '''
+    """
+    Process a single image/mask pair, splitting them into patches
+    of the specified size across the entire image.
+    """
+    if img.shape != mask.shape:
+        raise ValueError("Image and mask must have the same dimensions")
 
-    # Get bounding box for non-zero region in the mask
-    nz = np.nonzero(mask)
-    if len(nz[0]) == 0:
-        return
-    min_y, max_y = np.min(nz[0]), np.max(nz[0])
-    min_x, max_x = np.min(nz[1]), np.max(nz[1])
+    # Get full image dimensions
+    height, width = img.shape[0], img.shape[1]
 
-    # Crop to the smallest area that can encompass the full non-zero area
-    crop_height = (max_y - min_y + 1)
-    crop_width = (max_x - min_x + 1)
+    # Calculate padding needed to make dimensions divisible by patch_size
+    pad_height = (patch_size - height % patch_size) % patch_size
+    pad_width = (patch_size - width % patch_size) % patch_size
 
-    # Adjust crop to be divisible by patch size
-    crop_height = ((crop_height + patch_size - 1) // patch_size) * patch_size
-    crop_width = ((crop_width + patch_size - 1) // patch_size) * patch_size
+    # Pad image and mask if necessary
+    if pad_height > 0 or pad_width > 0:
+        # Pad with zeros
+        padded_img = np.pad(img, ((0, pad_height), (0, pad_width)), mode="constant")
+        padded_mask = np.pad(mask, ((0, pad_height), (0, pad_width)), mode="constant")
+    else:
+        padded_img = img
+        padded_mask = mask
 
-    # Update min, max values to reflect the new crop
-    min_y = max(0, min_y - (min_y % patch_size))
-    min_x = max(0, min_x - (min_x % patch_size))
-    max_y = min(min_y + crop_height, img.shape[0])
-    max_x = min(min_x + crop_width, img.shape[1])
+    # Calculate number of patches in each dimension
+    n_patches_height = padded_img.shape[0] // patch_size
+    n_patches_width = padded_img.shape[1] // patch_size
 
-    # Ensure the crop fits within the original image/mask dimensions
-    crop_height = max_y - min_y
-    crop_width = max_x - min_x
+    patch_index = 0
+    # Iterate over the entire image
+    for y in range(n_patches_height):
+        y_start = y * patch_size
+        y_end = y_start + patch_size
 
-    # Crop mask and image
-    cropped_mask = mask[min_y:max_y, min_x:max_x]
-    cropped_img = img[min_y:max_y, min_x:max_x]
+        for x in range(n_patches_width):
+            x_start = x * patch_size
+            x_end = x_start + patch_size
 
-    # Adjust crop if it is still not divisible by patch size
-    if cropped_mask.shape[0] % patch_size != 0:
-        extra = cropped_mask.shape[0] % patch_size
-        cropped_mask = cropped_mask[:-extra, :]
-        cropped_img = cropped_img[:-extra, :]
-        max_y -= extra
+            # Extract patches
+            img_patch = padded_img[y_start:y_end, x_start:x_end]
+            mask_patch = padded_mask[y_start:y_end, x_start:x_end]
 
-    if cropped_mask.shape[1] % patch_size != 0:
-        extra = cropped_mask.shape[1] % patch_size
-        cropped_mask = cropped_mask[:, :-extra]
-        cropped_img = cropped_img[:, :-extra]
-        max_x -= extra
+            # Calculate coordinates in original image
+            orig_x_start = min(x_start, width)
+            orig_y_start = min(y_start, height)
+            orig_x_end = min(x_end, width)
+            orig_y_end = min(y_end, height)
 
-    # Generate patch coordinates using cropped image indices and adjust to original image coordinates
-    patch_coords = [
-        (x + min_x, y + min_y, x + min_x + patch_size, y + min_y + patch_size)
-        for y in range(0, cropped_mask.shape[0], patch_size)
-        for x in range(0, cropped_mask.shape[1], patch_size)
-    ]
+            coords = (orig_x_start, orig_y_start, orig_x_end, orig_y_end)
 
-    # Split into patches
-    mask_patches = [
-        cropped_mask[y:y + patch_size, x:x + patch_size]
-        for y in range(0, cropped_mask.shape[0], patch_size)
-        for x in range(0, cropped_mask.shape[1], patch_size)
-    ]
-
-    img_patches = [
-        cropped_img[y:y + patch_size, x:x + patch_size]
-        for y in range(0, cropped_img.shape[0], patch_size)
-        for x in range(0, cropped_img.shape[1], patch_size)
-    ]
+            # Yield all patches regardless of content
+            yield unique_id, patch_index, img_patch, mask_patch, coords
+            patch_index += 1
 
 
-    threshold = .2
-
-    # Save patches
-    for i, (mask_patch, img_patch, coords) in enumerate(
-            zip(mask_patches, img_patches, patch_coords)):
-        # Skip patches with too few non-zero pixels
-        if np.count_nonzero(mask_patch) < threshold * patch_size ** 2:
-            continue
-        yield unique_id, i, img_patch, mask_patch, coords
-
-
-def process_file_pair(batch, img_folder, mask_folder, output_folder):
-    '''
+def process_file_pair(batch, img_folder, mask_folder, output_folder, patch_sizes=[64], save_coords=False):
+    """
     Process a batch of image/mask pairs, splitting them into patches of
     different sizes and saving them to disk. The patches are saved in
     subdirectories of the output folder corresponding to their size.
-    '''
-    powers_of_two = [2 ** i for i in range(5, 8)]  # [32, 64, 128]
+    """
     pairs_to_save = []
     loaded_pairs = {}
     for mask_name, img_name in batch:
@@ -110,34 +85,54 @@ def process_file_pair(batch, img_folder, mask_folder, output_folder):
             # try with tiff extension
             img_path = img_folder / (img_name + ".tiff")
             img = tiff.memmap(img_path)
-        mask = np.load(mask_path, mmap_mode='r')['mask']
+        except ValueError:
+            try:
+                img = imread(img_path, IMREAD_UNCHANGED)
+            except Exception as e:
+                logger.error(f"Could not open file {img_path}: {e}")
+                exit(1)
+        mask = np.load(mask_path, mmap_mode="r")["mask"]
         loaded_pairs[img_name] = (img, mask)
 
     for img_name, (img, mask) in loaded_pairs.items():
-        for patch_size in powers_of_two:
-            for uid, idx, _img, _mask, coords in process_file(img, mask,
-                                                      img_name, patch_size):
+        for patch_size in patch_sizes:
+            for uid, idx, _img, _mask, coords in process_file(img, mask, img_name, patch_size):
                 pairs_to_save.append((_img, _mask, uid, idx, patch_size, coords))
+                
 
     # Save the pairs
     # create a csv file to store the patch coordinates
-    csv_file = output_folder / "patch_coordinates.csv"
-    with open(csv_file, 'w') as f:
-        f.write("uid_idx,patch_size,x0,y0,x1,y1\n")
-        for img, mask, uid, idx, patch_size, (x0, y0, x1, y1) in pairs_to_save:
-            f.write(f"{uid}_{idx},{patch_size},{x0},{y0},{x1},{y1}\n")
-            img_output_path = output_folder / "imgs" / \
-                f'{patch_size}x{patch_size}' / f"{uid}_{idx}.tif"
-            mask_output_path = output_folder / "masks" / \
-                f'{patch_size}x{patch_size}' / f"{uid}_{idx}.npz"
+    if save_coords:
+        csv_file = output_folder / "patch_coordinates.csv"
+        with open(csv_file, "w") as f:
+            f.write("uid_idx,patch_size,x0,y0,x1,y1\n")
+            for img, mask, uid, idx, patch_size, (x0, y0, x1, y1) in pairs_to_save:
+                f.write(f"{uid}_{idx},{patch_size},{x0},{y0},{x1},{y1}\n")
+                img_output_path = (
+                    output_folder / "imgs" / f"{patch_size}x{patch_size}" / f"{uid}_{idx}.tif"
+                )
+                mask_output_path = (
+                    output_folder / "masks" / f"{patch_size}x{patch_size}" / f"{uid}_{idx}.npz"
+                )
+                np.savez_compressed(mask_output_path, mask=mask)
+                tiff.imwrite(img_output_path, img.astype(np.uint16))
+    else:
+        for img, mask, uid, idx, patch_size, _ in pairs_to_save:
+            img_output_path = (
+                output_folder / "imgs" / f"{patch_size}x{patch_size}" / f"{uid}_{idx}.tif"
+            )
+            mask_output_path = (
+                output_folder / "masks" / f"{patch_size}x{patch_size}" / f"{uid}_{idx}.npz"
+            )
             np.savez_compressed(mask_output_path, mask=mask)
             tiff.imwrite(img_output_path, img.astype(np.uint16))
+        
 
 
 def into_batches(iterable, batch_size):
-    '''
+    """
     Split an iterable into batches of a specified size.
-    '''
+    """
     iterator = iter(iterable)
     while True:
         first = list(islice(iterator, 1))  # Get the first element (if it exists)
@@ -148,25 +143,24 @@ def into_batches(iterable, batch_size):
 
 
 def files_match(mask_file, img_file):
-    '''
+    """
     Check if the mask and image files match by comparing their names.
     Composite mask files are matched with composite image files by correcting
     the name of the mask file to match the image file.
-    '''
-    
+    """
+
     return prepare_name_for_comparison(mask_file) == prepare_name_for_comparison(img_file)
 
 
 def match_files(mask_files, img_files):
-    '''
+    """
     Match mask and image files by comparing their names. If a mask file does
     not have a matching image file, it is removed from the list. If an image
     file does not have a matching mask file, it is removed from the list.
-    '''
-    mismatched = list(map(
-        lambda x: x,
-        filter(lambda x: not files_match(*x),
-               zip(mask_files, img_files))))
+    """
+    mismatched = list(
+        map(lambda x: x, filter(lambda x: not files_match(*x), zip(mask_files, img_files)))
+    )
     for m in mismatched:
         # check if it is the mask or the image that is missing
         prepared_names = list(map(prepare_name_for_comparison, m))
@@ -183,44 +177,44 @@ def match_files(mask_files, img_files):
 
 
 def prepare_name_for_comparison(name):
-    '''
+    """
     Prepare a file name for comparison by removing the extension and
     replacing "composite_mask" with "composite_image".
-    '''
+    """
     if name.startswith("composite_mask"):
         name = name.replace("composite_mask", "composite_image")
 
     # remove the extension
-    name = name.split('.')[0]
+    name = name.split(".")[0]
     return name
 
 
 def prepare_directory_structure(output_dir):
-    '''
+    """
     Create the directory structure for the output files.
     Create subdirectories for images and masks of different sizes.
-    '''
+    """
     # Create output directories
     output_masks_dir = output_dir / "masks"
     output_imgs_dir = output_dir / "imgs"
     output_masks_dir.mkdir(parents=True, exist_ok=True)
     output_imgs_dir.mkdir(parents=True, exist_ok=True)
     for patch_size in [32, 64, 128]:
-        (output_masks_dir / f"{patch_size}x{patch_size}").mkdir(
-            parents=True, exist_ok=True)
-        (output_imgs_dir / f"{patch_size}x{patch_size}").mkdir(
-            parents=True, exist_ok=True)
+        (output_masks_dir / f"{patch_size}x{patch_size}").mkdir(parents=True, exist_ok=True)
+        (output_imgs_dir / f"{patch_size}x{patch_size}").mkdir(parents=True, exist_ok=True)
 
 
 def make_assertions(mask_files, img_files):
-    '''
+    """
     Verify that the mask and image files are appropriately aligned and that
     there are no missing files.
-    '''
-    assert all(map(lambda x: files_match(*x), zip(mask_files, img_files))
-               ), "Some mask/image pairs do not match"
+    """
+    assert all(
+        map(lambda x: files_match(*x), zip(mask_files, img_files))
+    ), "Some mask/image pairs do not match"
     assert len(mask_files) == len(
-        img_files), "Number of mask files does not match number of image files"
+        img_files
+    ), "Number of mask files does not match number of image files"
     assert len(mask_files) > 0, "No mask files found"
     assert len(img_files) > 0, "No image files found"
 
@@ -233,7 +227,6 @@ def main(mask_dir, img_dir, output_dir, mp=True, batch_size=25):
     mask_files = []
     img_files = []
 
-
     # Create the output directory structure
     prepare_directory_structure(output_dir)
 
@@ -244,18 +237,21 @@ def main(mask_dir, img_dir, output_dir, mp=True, batch_size=25):
         globbed_img = glob(str(img_dir))
         if not globbed_mask or not globbed_img:
             raise ValueError("No files found in the specified directories")
-        
+
         mask_dir = Path(globbed_mask[0]).parent
         img_dir = Path(globbed_img[0]).parent
-        
+
         mask_files = [Path(f).stem for f in globbed_mask]
         img_files = [Path(f).stem for f in globbed_img]
-        
+
     else:
-        mask_files = [Path(f).stem for f in os.listdir(
-            mask_dir) if f.endswith('.npz')]
-        img_files = [Path(f).stem for f in os.listdir(img_dir) if (f.endswith('.tif') or f.endswith('.tiff'))]
-    
+        mask_files = [Path(f).stem for f in os.listdir(mask_dir) if f.endswith(".npz")]
+        img_files = [
+            Path(f).stem
+            for f in os.listdir(img_dir)
+            if (f.endswith(".tif") or f.endswith(".tiff"))
+        ]
+
     # Create args list for multiprocessing
     mask_files = sorted(mask_files)
     img_files = sorted(img_files)
@@ -264,7 +260,7 @@ def main(mask_dir, img_dir, output_dir, mp=True, batch_size=25):
     mask_files, img_files = match_files(mask_files, img_files)
     make_assertions(mask_files, img_files)
     iterables = zip(mask_files, img_files)
-    
+
     if not mp:
         # Single process
         for batch in into_batches(iterables, batch_size=batch_size):
@@ -274,14 +270,12 @@ def main(mask_dir, img_dir, output_dir, mp=True, batch_size=25):
     batches = list(into_batches(iterables, batch_size=batch_size))
     max_workers = multiprocessing.cpu_count()  # Use all the available cores
     with multiprocessing.Pool(max_workers) as pool:
-        tasks = [pool.apply_async(
-            process_file_pair,
-            args=(batch, img_dir, mask_dir, output_dir))
-            for batch in batches]
+        tasks = [
+            pool.apply_async(process_file_pair, args=(batch, img_dir, mask_dir, output_dir))
+            for batch in batches
+        ]
 
-        for ok, res in ConcurrentTqdm(
-                tasks, total=len(tasks),
-                desc="Processing files"):
+        for ok, res in ConcurrentTqdm(tasks, total=len(tasks), desc="Processing files"):
             if not ok:
                 print_exception(type(res), res, res.__traceback__)
 
