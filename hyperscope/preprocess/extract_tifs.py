@@ -15,8 +15,6 @@ from matplotlib.patches import Patch
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from sklearn.cluster import KMeans
 from typing import List, Optional, Union
-from scipy import ndimage
-from skimage.filters import threshold_otsu
 from hyperscope.helpers.func import flatten
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib as mpl
@@ -24,6 +22,7 @@ from matplotlib.figure import Figure
 import supervision as sv
 from supervision.annotators.utils import ColorLookup
 from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
+from hyperscope.helpers.mp import wait_for_memory
 import torch
 
 
@@ -298,7 +297,6 @@ def create_mask_generator():
     sam.to(device=DEVICE)
     return SamAutomaticMaskGenerator(sam)
 
-
 def main(
     input_patterns: List[str],
     output: str,
@@ -350,7 +348,7 @@ def main(
 
         with mp.Pool(mp.cpu_count()) as pool:
             futures = []
-
+            wait_for_memory(128, device='CUDA')
             for i in range(0, total_images, batch_size):
                 if n_batches > 0 and last_index // batch_size >= n_batches:
                     break
