@@ -75,8 +75,7 @@ class ConcurrentTqdm(tqdm):
                     if future.ready():
                         try:
                             result = future.get()
-                            if result is not None:
-                                to_yield = (True, result)
+                            to_yield = (True, result)
                         except Exception as e:
                             to_yield = (False, e)
                         futures.remove(future)

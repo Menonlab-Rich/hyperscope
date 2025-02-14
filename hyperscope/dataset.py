@@ -1,86 +1,96 @@
-from pathlib import Path
-
+import json
 import typer
 from loguru import logger
-from tqdm import tqdm
 
-from hyperscope.config import PROCESSED_DATA_DIR, RAW_DATA_DIR, INTERIM_DATA_DIR
 from hyperscope.preprocess import superpixel as pp_superpixel
 from hyperscope.preprocess import extract_tifs as pp_extract_tifs
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 app = typer.Typer()
 
 
-@app.command()
-def main():
-    logger.info("Processing dataset...")
-    extract_tif(
-        input_patterns=RAW_DATA_DIR / "images/*.tif",
-        output=INTERIM_DATA_DIR / "extracted",
-        normalize=True,
-        create_dir=True,
-        verify=True,
-        no_confirm=True,
-        multi_process=True,
-        batch_size=10,
-        n_batches=-1,
-    )
+def parse_json_dict(value: str) -> Dict:
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as e:
+        raise typer.BadParameter(f"Invalid JSON format: {e}")
 
-    superpixel(
-        image_dir=INTERIM_DATA_DIR / "extracted" / "imgs",
-        mask_dir=INTERIM_DATA_DIR / "extracted" / "masks",
-        output_dir=PROCESSED_DATA_DIR / "superpixel_images",
-        multi_process=True,
-    )
+
+def parse_crop_dimensions(value: str) -> Optional[List[int]]:
+    """Parse crop dimensions from string input."""
+    if value is None:
+        return None
+    try:
+        # Handle different input formats
+        if "," in value:
+            dims = [int(x.strip()) for x in value.split(",")]
+        else:
+            dims = [int(x) for x in value.split()]
+
+        if len(dims) != 4:
+            raise typer.BadParameter("Crop must have exactly 4 values: left, top, right, bottom")
+        return dims
+    except ValueError:
+        raise typer.BadParameter("Crop values must be integers")
 
 
 @app.command()
 def extract_tif(
-    input_patterns: List[str] = typer.Argument(..., help="Glob pattern to match TIFF files."),
-    output: str = typer.Option(
-        ..., "--output", "-o", help="Directory where extracted pages will be saved."
+    input_patterns: List[str] = typer.Argument(..., help="Input file patterns to process"),
+    output: str = typer.Argument(..., help="Output directory path"),
+    catmap: str = typer.Option(
+        ..., "--catmap", help="Category mapping JSON dictionary", callback=parse_json_dict
     ),
-    normalize: bool = typer.Option(False, "--normalize", help="Normalize the extracted images."),
     create_dir: bool = typer.Option(
-        True, "--create-dir", help="Create the output directory if it doesn't exist."
+        True, "--create-dir/--no-create-dir", help="Create output directory if it doesn't exist"
     ),
     crop: Optional[str] = typer.Option(
         None,
         "--crop",
-        help="Remove the specified number of pixels from the edges (left, upper, right, lower).",
+        help="Crop dimensions [left, top, right, bottom]",
+        callback=parse_crop_dimensions,
     ),
-    verify: bool = typer.Option(False, "--verify", help="Verify the extracted images."),
-    no_confirm: bool = typer.Option(
-        False, "--no-confirm", help="Suppress the confirmation prompt."
+    verify: bool = typer.Option(
+        False, "--verify/--no-verify", help="Verify input files before processing"
     ),
     multi_process: bool = typer.Option(
-        True, "--multi-process", help="Use multiple processes to extract images."
+        True, "--multi-process/--single-process", help="Enable/disable multiprocessing"
     ),
-    batch_size: Optional[int] = typer.Option(
-        None, "--batch-size", help="Number of images to process in each batch."
+    batch_size: int = typer.Option(
+        100, "--batch-size", help="Number of images to process in each batch"
     ),
     n_batches: int = typer.Option(
-        -1, "--n-batches", help="Number of batches to process. -1 for all."
+        -1, "--n-batches", help="Number of batches to process (-1 for all)"
     ),
+    darkframe: Optional[str] = typer.Option(
+        None, "--darkframe", help="Path to darkframe image for correction"
+    ),
+    exclude: Optional[str] = typer.Option(
+        None, "--exclude", help="Pattern to exclude files from processing"
+    ),
+    skip_existing: bool = typer.Option(
+        False, "--skip-existing/--overwrite", help="Skip existing output files"
+    ),
+    no_confirm: bool = typer.Option(False, "--no-confirm", help="Skip confirmation prompts"),
 ):
     """
     Extract pages from TIFF files or NumPy arrays.
     """
-    logger.info(f"Extracting images from: {input_patterns}")
-    if crop is not None:
-        crop = [int(n) for n in crop.split(",")]
+
     pp_extract_tifs.main(
         input_patterns=input_patterns,
         output=output,
-        normalize=normalize,
+        catmap=catmap,
         create_dir=create_dir,
         crop=crop,
         verify=verify,
-        no_confirm=no_confirm,
         multi_process=multi_process,
         batch_size=batch_size,
         n_batches=n_batches,
+        darkframe=darkframe,
+        exclude=exclude,
+        skip_existing=skip_existing,
+        no_confirm=no_confirm,
     )
 
 
@@ -90,7 +100,7 @@ def preprocess_superpixel(
     mask_dir: str = typer.Argument(..., help="Directory containing masks for images."),
     output_dir: str = typer.Argument(..., help="Directory to save superpixel images."),
     multi_process: bool = typer.Option(True, "--multi-process", help="Use multiple processes."),
-    batch_size: int = typer.Option(25, "--batch-size", help="Size of batches if multiprocessing")
+    batch_size: int = typer.Option(25, "--batch-size", help="Size of batches if multiprocessing"),
 ):
     """
     Apply superpixel segmentation to images.
