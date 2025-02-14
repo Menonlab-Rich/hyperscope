@@ -105,12 +105,13 @@ def process_file_pair(batch, img_folder, mask_folder, output_folder):
         img_path = img_folder / (img_name + ".tif")
         mask_path = mask_folder / (mask_name + ".npz")
         try:
-            img = tiff.memmap(img_path)
+            img = tiff.imread(img_path)
         except FileNotFoundError:
             # try with tiff extension
             img_path = img_folder / (img_name + ".tiff")
-            img = tiff.memmap(img_path)
-        mask = np.load(mask_path, mmap_mode='r')['mask']
+            img = tiff.imread(img_path)
+        mask = np.load(mask_path, mmap_mode='r')
+        mask = mask[list(mask.keys())[0]]
         loaded_pairs[img_name] = (img, mask)
 
     for img_name, (img, mask) in loaded_pairs.items():
