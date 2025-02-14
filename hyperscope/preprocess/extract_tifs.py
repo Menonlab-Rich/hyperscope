@@ -233,12 +233,15 @@ def process_image(img, crop, df, mask_generator, verify):
 
     # Darkframe correction
     img -= df
-    return_img = minmax_norm(img.copy(), 0, maxval, np.uint16)
+    return_img = minmax_norm(img.copy(), 0, 255, np.uint8)
     image_rgb = cv2.cvtColor(return_img, cv2.COLOR_GRAY2RGB)
+    logger.info("Generating Mask")
     result = mask_generator.generate(image_rgb)
+    logger.info("Segmenting Image")
     detections = sv.Detections.from_sam(result)
     return_values += [detections, return_img]
     if verify:
+        logger("Generating Verification plot")
         mask_annotator = sv.MaskAnnotator(color_lookup=ColorLookup.INDEX)
         annotated_image = mask_annotator.annotate(
             cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR), detections
@@ -266,6 +269,7 @@ def process_images(
     for img_path in paths:
         img_name = img_path.stem
         img = np.load(img_path).astype(np.uint16)
+        logger.info("Image Loaded")
         detections, img, *rest = process_image(img, crop, df, mask_generator, verify)
         labels = ~detections.mask[0]
         sig_percent = len(labels == True) / labels.size
