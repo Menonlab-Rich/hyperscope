@@ -34,6 +34,20 @@ def parse_crop_dimensions(value: str) -> Optional[List[int]]:
         raise typer.BadParameter("Crop values must be integers")
 
 
+# '''
+#     input_patterns: List[str],
+#     output: str,
+#     catmap: dict,
+#     create_dir: bool = True,
+#     crop: Optional[List[int]] = None,
+#     verify: bool = False,
+#     batch_size: int = 4,
+#     darkframe: Optional[str] = None,
+#     exclude: Optional[str] = None,
+#     max_size: int = 1024,  # New parameter for maximum image dimension
+# '''
+
+
 @app.command()
 def extract_tif(
     input_patterns: List[str] = typer.Argument(..., help="Input file patterns to process"),
@@ -53,14 +67,8 @@ def extract_tif(
     verify: bool = typer.Option(
         False, "--verify/--no-verify", help="Verify input files before processing"
     ),
-    multi_process: bool = typer.Option(
-        True, "--multi-process/--single-process", help="Enable/disable multiprocessing"
-    ),
     batch_size: int = typer.Option(
         100, "--batch-size", help="Number of images to process in each batch"
-    ),
-    n_batches: int = typer.Option(
-        -1, "--n-batches", help="Number of batches to process (-1 for all)"
     ),
     darkframe: Optional[str] = typer.Option(
         None, "--darkframe", help="Path to darkframe image for correction"
@@ -68,10 +76,6 @@ def extract_tif(
     exclude: Optional[str] = typer.Option(
         None, "--exclude", help="Pattern to exclude files from processing"
     ),
-    skip_existing: bool = typer.Option(
-        False, "--skip-existing/--overwrite", help="Skip existing output files"
-    ),
-    no_confirm: bool = typer.Option(False, "--no-confirm", help="Skip confirmation prompts"),
 ):
     """
     Extract pages from TIFF files or NumPy arrays.
@@ -84,13 +88,9 @@ def extract_tif(
         create_dir=create_dir,
         crop=crop,
         verify=verify,
-        multi_process=multi_process,
         batch_size=batch_size,
-        n_batches=n_batches,
         darkframe=darkframe,
         exclude=exclude,
-        skip_existing=skip_existing,
-        no_confirm=no_confirm,
     )
 
 
