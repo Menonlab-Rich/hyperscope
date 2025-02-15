@@ -345,6 +345,7 @@ def main(
 
     if multi_process:
         import multiprocessing as mp
+        mp.set_start_method('spawn', force=True)
 
         with mp.Pool(mp.cpu_count()) as pool:
             futures = []
