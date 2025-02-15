@@ -18,6 +18,7 @@ from PIL import Image, ImageSequence
 import glob
 from hyperscope import config
 from hyperscope.helpers.func import flatten
+from tqdm import tqdm
 
 
 class ImageDataset(Dataset):
@@ -200,7 +201,7 @@ def process_images(
     visualizer = VerificationVisualizer() if verify else None
 
     with torch.no_grad():
-        for batch in dataloader:
+        for batch in tqdm(dataloader, desc="Processing Batches", unit='batch'):
             batch["image"] = batch["image"].to(device)
 
             masks, signal_percentages = processor(batch)
