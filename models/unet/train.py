@@ -60,7 +60,7 @@ def main(config: Config, debug: bool = False, manual: bool = False):
     logger = NeptuneLogger(
         api_key=os.environ.get("NEPTUNE_API_TOKEN"),
         project="richbai90/unet2",
-        tags=["training", "segmentation", "unet", "32x32"]
+        tags=["training", "segmentation", "unet", "64x64", "worms"]
     )
 
     run_id = logger.experiment["sys/id"].fetch()
@@ -91,8 +91,9 @@ def main(config: Config, debug: bool = False, manual: bool = False):
         "callbacks": [checkpoint_cb, swa],
         "gradient_clip_val": 1.0,
         "accumulate_grad_batches": 5,
-        "limit_train_batches": 0.5,
-        "limit_val_batches": 0.1,
+        # "limit_train_batches": 1,
+        "limit_val_batches": 0.5,
+        "devices": 1,
     }
 
     if debug:

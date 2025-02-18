@@ -9,7 +9,14 @@ def load_model(ckpt_path: str, config: Config) -> Tuple[LightningModule, Lightni
     prefix = config.get('prefix', None)
     input_loader = InputLoader(config.data_dir)
     target_loader = TargetLoader(config.mask_dir)
-    model = UNetLightning.load_from_checkpoint(ckpt_path, strict=False)
+    # model = UNetLightning.load_from_checkpoint(ckpt_path, strict=False, n_channels=4)
+    model = UNetLightning.load_from_checkpoint(ckpt_path,
+	n_channels=config.input_channels,
+	n_classes=len(config.classes),
+	learning_rate=config.learning_rate,
+	batch_size=config.batch_size,
+    )
+
     data_module = UNetDataModule.load_from_checkpoint(ckpt_path, test_loaders='validation', n_workers=4, prefix=prefix)
     #data_module = UNetDataModule(
     #    input_loader=input_loader,
@@ -29,7 +36,7 @@ def main(config: Config):
     logger = NeptuneLogger(
         api_key=os.environ.get("NEPTUNE_API_TOKEN"),
         project="richbai90/UNet2",
-        tags=["testing", "unet", "hires", prefix or 'all'],
+        tags=["testing", "unet", "hires", config.get('prefix', None) or 'all'],
     )
     
     trainer_args = {
@@ -47,6 +54,4 @@ def main(config: Config):
     
 if __name__ == '__main__':
     cfg = Config(CONFIG_FILE_PATH)
-    for prefix in ['605', '625', 'composite', None]:
-        cfg.set('prefix', prefix)
-        main(cfg)
+    main(cfg)

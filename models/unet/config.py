@@ -16,7 +16,7 @@ CONFIG_FILE_PATH = 'config.yml'
 
 def path(loader, node):
     seq = loader.construct_sequence(node)
-    return os_path.join(*seq)
+    return os_path.expanduser(os_path.join(*seq))
 
 
 # register the tag handlerpathjoin

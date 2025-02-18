@@ -1,4 +1,5 @@
 # Previous imports...
+import pdb
 import os
 from pathlib import Path
 import torch
@@ -56,20 +57,20 @@ class ImageDataset(Dataset):
         img_path = self.paths[idx]
         img = np.load(img_path).astype(np.uint16)
         original_size = img.shape
+        darkframe = None
 
         if self.crop:
             x1, y1, x2, y2 = self.crop
             img = img[y1:y2, x1:x2]
             if self.darkframe is not None:
-                self.darkframe = self.darkframe[y1:y2, x1:x2]
-            original_size = img.shape
+               darkframe = self.darkframe[y1:y2, x1:x2]
 
         # Initial normalization
         img = self.minmax_norm(img)
 
         # Darkframe correction if available
-        if self.darkframe is not None:
-            img -= self.darkframe
+        if darkframe is not None:
+            img -= darkframe
 
         # Resize image
         img_resized, _ = self.resize_maintain_aspect(img)
@@ -174,7 +175,7 @@ def get_dataloader(
         batch_size=batch_size,
         sampler=sampler,
         shuffle=sampler is None,
-        num_workers=4,
+        num_workers=0,
         pin_memory=True,
     )
 

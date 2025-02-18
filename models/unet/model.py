@@ -30,9 +30,9 @@ class UNetLightning(pl.LightningModule):
         self.amp = amp
         self.n_classes = n_classes
         self.criterion = nn.CrossEntropyLoss() if n_classes > 1 else nn.BCEWithLogitsLoss()
-        self.dice_loss = DiceLoss(ignore_index=0)  # 0 is the background class
+        self.dice_loss = DiceLoss()  # 0 is the background class
         self.val_accuracy = GeneralizedDiceScore(
-            self.n_classes, include_background=False)
+            self.n_classes)
         self.train_loss_metric = MeanMetric()
         self.val_loss_metric = MeanMetric()
         self.val_outputs = []
@@ -67,7 +67,7 @@ class UNetLightning(pl.LightningModule):
         # Update and log the training loss
         self.train_loss_metric.update(loss)
         self.log('train_loss', self.train_loss_metric.compute(),
-                 on_step=True, on_epoch=True, prog_bar=True, batch_size=self.batch_size)
+                 on_step=True, on_epoch=True, prog_bar=True, batch_size=self.batch_size, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -88,10 +88,10 @@ class UNetLightning(pl.LightningModule):
         self.val_loss_metric.update(loss)
         self.log(
             'val_loss', self.val_loss_metric.compute(),
-            on_epoch=True, prog_bar=True, batch_size=self.batch_size)
+            on_epoch=True, prog_bar=True, batch_size=self.batch_size, sync_dist=True)
         self.log(
             'val_dice', self.val_accuracy.compute(),
-            on_epoch=True, prog_bar=True, batch_size=self.batch_size)
+            on_epoch=True, prog_bar=True, batch_size=self.batch_size, sync_dist=True)
         return {
             'loss': loss,
             'accuracy': self.val_accuracy,
@@ -166,7 +166,7 @@ class UNetLightning(pl.LightningModule):
 
         # Update and log the custom accuracy
         self.val_accuracy.update(masks_pred, true_masks)
-        self._update_confusion_matrix(masks_pred, true_masks)
+        self._update_confusion_matrix(masks_pred.to(self.device), true_masks.to(self.device))
 
         return {
             'img': images,
@@ -194,7 +194,7 @@ class UNetLightning(pl.LightningModule):
         # Log the total dice score for the entire test set
         self.log('total_test_dice', self.val_accuracy.compute(), prog_bar=True)
         self.val_accuracy.reset()  # Reset after logging
-        plt = self.mccm.plot()
+        plt = self.mccm.plot()[0]
         self.logger.experiment['Confusion Matrix'].log(File.as_image(plt))
         self.mccm.reset()
 
@@ -216,36 +216,28 @@ class UNetLightning(pl.LightningModule):
         target_classified = self._classify_tensors(target)
         
         # Update the confusion matrix
-        self.mccm.update(pred_classified, target_classified)
-        
-    def _classify_tensors(self, tensor, patch_size=8):
+        self.mccm.update(pred_classified.to(self.device), target_classified.to(self.device))
+    def _classify_tensors(self, tensor, patch_size=8, nclasses=3):
         tensor = tensor.squeeze(1)
-        B, H, W = tensor.shape  # Keep batch dimension
+        B, H, W = tensor.shape
 
-        # Divide the tensor into 8x8 patches
+        # Create patches
         patches = tensor.unfold(1, patch_size, patch_size).unfold(2, patch_size, patch_size)
-
-        # Flatten the patches to create a list of 8x8 patches
         patches = patches.contiguous().view(B, -1, patch_size, patch_size)
+    
+        # Create a tensor to store individual patch classifications
+        classified_patches = torch.zeros(B * patches.shape[1], dtype=torch.int64)
+    
+        patch_idx = 0
+        for b in range(patches.shape[0]):
+            for i in range(patches.shape[1]):
+                patch = patches[b, i, :, :]
+                uniq, counts = torch.unique(patch, return_counts=True)
+                class_ = int(uniq[torch.argmax(counts)].item())
+                classified_patches[patch_idx] = class_
+                patch_idx += 1
 
-        # Initialize the classified patches tensor
-        classified_patches = torch.zeros(B, patches.shape[1], dtype=torch.int64)
-
-        # Classify each patch
-        for i in range(patches.shape[1]):
-            patch = patches[:, i, :, :]
-            count_1 = (patch == 1).sum(dim=[1, 2])
-            count_2 = (patch == 2).sum(dim=[1, 2])
-
-            # Determine classification based on the count
-            classified_patches[:, i] = torch.where(count_1 > count_2, 1,
-                                                torch.where(count_2 > count_1, 2, 0))
-
-        # Flatten the classified patches to be compatible with MulticlassConfusionMatrix
-        classified_patches = classified_patches.view(-1)
-
-        return classified_patches
-        
+        return classified_patches        
 
     def _mask_to_rgb(self, mask):
         """

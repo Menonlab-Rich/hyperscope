@@ -35,7 +35,7 @@ class BaseConfigHandler(ABC):
         for key, value in self.config.items():
             yield key, value
     
-    def __getattr__(self, name: str) -> torch.Any:
+    def __getattr__(self, name: str) -> any:
         # If the attribute is not found in the class, proxy it to the config
         return getattr(self.config, name)
 

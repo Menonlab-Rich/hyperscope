@@ -1,25 +1,24 @@
 # define the root directory that all other paths are relative to
-root_dir: &root_dir ../../data/transfer/preprocess/
-data_dir: !path [*root_dir, "superpixels", "imgs", "32x32"]
-mask_dir: !path [*root_dir, "superpixels", "masks", "32x32"]
+root_dir: &root_dir ~/data/transfer/worms/
+data_dir: !path [*root_dir, "superpixels", "imgs", "64x64"]
+mask_dir: !path [*root_dir, "superpixels", "masks", "64x64"]
 test_dir: !path [*root_dir, "tifs"]
-out_dir: &out_dir !path [*root_dir, "output"]
-ckpt_path: /scratch/general/nfs1/u0977428/transfer/preprocess/output/unet-UN-306-epoch=07-val_dice=0.90.ckpt 
+out_dir: &out_dir !path ["~/data", "output"]
+ckpt_path: /scratch/general/nfs1/u0977428/output/unet-UN-427-epoch=07-val_dice=0.96.ckpt 
 input_channels: 1 
 learning_rate: 1.e-5
-batch_size: 32 
+batch_size: 64 
 epochs: 10
 device: cuda # Example: 'cpu' or 'cuda'
 
 classes:
   - "bg"
-  - "625"
-  - "605"
+  - "mkate"
+  - "mcherry"
 weights:
+  - 0.3
   - 1
   - 1
-  - 1
-
 gpus: 1 # How many gpus to use
 precision: '32-true' # 16, 32, 64, 'full', 'double', '16-mixed', '16-bf16'
 accelerator: 'auto' # 'cpu', 'gpu', 'tpu', 'amp', 'auto'
