@@ -64,7 +64,7 @@ class ImageDataset(Dataset):
             x1, y1, x2, y2 = self.crop
             img = img[y1:y2, x1:x2]
             if self.darkframe is not None:
-               darkframe = self.darkframe[y1:y2, x1:x2]
+                darkframe = self.darkframe[y1:y2, x1:x2]
 
         # Initial normalization
         img = self.minmax_norm(img)
@@ -88,6 +88,37 @@ class ImageDataset(Dataset):
             "path": img_path,
             "original": torch.from_numpy(img),
             "original_size": original_size,
+        }
+
+    @staticmethod
+    def collate(batch):
+        """
+        Custom collate function for the ImageDataset
+        Args:
+            batch: list of dictionary items from dataset
+        """
+        # Initialize empty lists for each key
+        images = []
+        paths = []
+        originals = []
+        original_sizes = []
+
+        # Collect items from batch
+        for item in batch:
+            images.append(item["image"])
+            paths.append(item["path"])
+            originals.append(item["original"])
+            original_sizes.append(item["original_size"])
+
+        # Stack tensors where appropriate
+        images = torch.stack(images, dim=0)
+        originals = torch.stack(originals, dim=0)
+
+        return {
+            "image": images,
+            "path": paths,  # Keep as list
+            "original": originals,
+            "original_size": original_sizes,  # Keep as list
         }
 
     @staticmethod
@@ -178,6 +209,7 @@ def get_dataloader(
         shuffle=sampler is None,
         num_workers=0,
         pin_memory=True,
+        collate_fn=ImageDataset.collate,
     )
 
 
@@ -202,7 +234,7 @@ def process_images(
     visualizer = VerificationVisualizer() if verify else None
 
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Processing Batches", unit='batch'):
+        for batch in tqdm(dataloader, desc="Processing Batches", unit="batch"):
             batch["image"] = batch["image"].to(device)
 
             masks, signal_percentages = processor(batch)
