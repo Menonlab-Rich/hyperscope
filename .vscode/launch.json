@@ -28,10 +28,15 @@
             "console": "internalConsole",
             "pythonPath": "/mnt/d/hyper-scope/.venv/bin/python",
             "args": [
-                "preprocess-superpixel",
-                "data/interim/to_process/imgs",
-                "data/interim/to_process/masks", 
-                "data/interim/to_process/superpixels"
+                "extract-tif",
+                "data/raw/worms/*.tif",
+                "data/interim/worms/",
+                "--no-confirm",
+                "--exclude=data/raw/worms/combo*.tif",
+                "--catmap={\"mkate\": 2, \"mch\": 3}",
+                "--batch-size=10",
+                "--crop=117,141,1440,860",
+                "--darkframe=data/raw/worms/darkframe"
             ],
             "justMyCode": true,
         }
