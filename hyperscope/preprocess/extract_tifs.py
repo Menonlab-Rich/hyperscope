@@ -160,7 +160,10 @@ class ImageProcessor(nn.Module):
         signal_percentages = []
 
         for i in range(batch_size):
-            image = images[i].cpu().numpy().astype(np.uint8)
+            image = images[i].permute(1, 2, 0).cpu().numpy()
+            if image.max() <= 1.0:
+                image *= 255
+            image = image.astype(np.uint8)
             original_size = original_sizes[i]
 
             # Generate masks using SAM on resized image
