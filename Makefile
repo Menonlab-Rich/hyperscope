@@ -5,7 +5,7 @@
 PROJECT_NAME = hyper-scope
 PYTHON_VERSION = 3.10
 PYTHON_INTERPRETER = python
-VENV_MANAGER = venv # options: venv, conda, pipenv, poetry, mamba
+# VENV_MANAGER = venv # options: venv, conda, pipenv, poetry, mamba
 VENV_PATH = ./.venv
 
 # Detect OS: Linux/Unix or Windows
@@ -77,6 +77,7 @@ format:
 ## Set up python interpreter environment
 .PHONY: create_environment
 create_environment:
+ifdef VENV_MANAGER
 ifeq ($(VENV_MANAGER), venv)
 	if [ -d $(VENV_PATH) ]; then exit 0; fi
 	$(PYTHON_INTERPRETER) -m venv $(VENV_PATH)
@@ -93,6 +94,10 @@ ifeq ($(VENV_MANAGER), poetry)
 endif
 ifeq ($(VENV_MANAGER), mamba)
 	mamba env create --name $(PROJECT_NAME) python=$(PYTHON_VERSION)
+endif
+else
+	python -m venv $(VENV_PATH)
+	VENV_MANAGER=venv
 endif
 
 ## Install package in editable mode

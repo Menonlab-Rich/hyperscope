@@ -318,6 +318,7 @@ class UNetDataModule(LightningDataModule):
 
     def _get_test_set(self):
         if isinstance(self.test_loaders, str):
+            print(self.test_loaders)
             if self.test_loaders.lower() == 'validation':
                 if getattr(self, 'val_inputs', None) is None:
                     warnings.warn(
@@ -345,8 +346,8 @@ class UNetDataModule(LightningDataModule):
         # Prevent overwriting existing attributes
         # Required when loading from state dict
         if name in (
-            'input_loader', 'target_loader', 'prediction_loader',
-                'test_loaders'):
+            'input_loader', 'target_loader', 'prediction_loader', 'test_loaders'
+                ):
             if getattr(self, name, None) is not None:
                 warnings.warn(f'Refusing to set {name} as it is already set.')
                 return
