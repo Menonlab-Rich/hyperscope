@@ -1,4 +1,5 @@
 import pytorch_lightning as pl
+from pytorch_lightning.loggers import NeptuneLogger
 from segment_anything import sam_model_registry
 from segment_anything.utils.transforms import ResizeLongestSide
 from torch.utils.data import DataLoader
@@ -6,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from dataset import CustomSAMDataset
 from config import config
+import os
 
 
 class SAMDataModule(pl.LightningDataModule):
@@ -72,6 +74,11 @@ class SAMLightningModule(pl.LightningModule):
 
 # Training setup
 def train_sam_lightning():
+    logger = NeptuneLogger(
+        api_key=os.environ.get("NEPTUNE_API_TOKEN"),
+        project="richbai90/SAM",
+        tags=["finetuning"],
+    )
     # Initialize model
     sam = sam_model_registry["vit_h"](checkpoint=config.checkpoint)
 
@@ -81,7 +88,7 @@ def train_sam_lightning():
 
     # Configure trainer
     trainer = pl.Trainer(
-        accelerator="gpu",
+        accelerator="cpu",
         devices=1,
         max_epochs=10,
         precision=16,  # Mixed precision training
@@ -95,7 +102,7 @@ def train_sam_lightning():
             ),
             pl.callbacks.EarlyStopping(monitor="train_loss", patience=10, mode="min"),
         ],
-        logger=pl.loggers.TensorBoardLogger("lightning_logs/", name="sam_finetuning"),
+        logger=logger,
     )
 
     # Start training
