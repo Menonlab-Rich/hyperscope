@@ -3,13 +3,14 @@ import numpy as np
 from PIL import Image
 import torch
 from torch.nn import functional as F
+from pathlib import Path
 import os
 
 
 class CustomSAMDataset(Dataset):
     def __init__(self, image_dir, mask_dir, transform=None):
-        self.image_paths = sorted([p for p in os.listdir(image_dir) if p.endswith('.tif')])
-        self.mask_paths = sorted([p for p in os.listdir(mask_dir) if p.endswith('.npz')])
+        self.image_paths = sorted([Path(image_dir) / p for p in os.listdir(image_dir) if p.endswith('.tif')])
+        self.mask_paths = sorted([Path(mask_dir) / p for p in os.listdir(mask_dir) if p.endswith('.npz')])
         self.transform = transform
 
     def __len__(self):
@@ -21,7 +22,8 @@ class CustomSAMDataset(Dataset):
 
         # Convert to numpy array and normalize to 0-1
         image = np.array(image).astype(np.float32)
-        image = image / 65535.0  # Normalize 16-bit to 0-1
+        image = image / image.max()  # Normalize 16-bit to 0-1
+        image = image.astype(np.float16)
 
         # Convert to RGB if grayscale
         if len(image.shape) == 2:
@@ -30,7 +32,7 @@ class CustomSAMDataset(Dataset):
         # Load NPZ mask
         mask = np.load(self.mask_paths[idx])
         mask = mask["arr_0"] if isinstance(mask, np.lib.npyio.NpzFile) else mask
-        mask = mask.astype(np.float32)
+        mask = mask.astype(np.float16)
 
         # Apply SAM's image transforms
         if self.transform is not None:

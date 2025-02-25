@@ -11,4 +11,6 @@ config = YAMLConfig(
 )
 
 if __name__ == '__main__':
+    print(config['img_dir'])
+    print(config['mask_dir'])
     print(config['checkpoint'])
