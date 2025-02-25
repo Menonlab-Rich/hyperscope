@@ -13,6 +13,8 @@ import os
 class SAMDataModule(pl.LightningDataModule):
     def __init__(self, image_dir, mask_dir, batch_size=1):
         super().__init__()
+        print(image_dir)
+        print(mask_dir)
         self.image_dir = image_dir
         self.mask_dir = mask_dir
         self.batch_size = batch_size
@@ -88,7 +90,7 @@ def train_sam_lightning():
 
     # Configure trainer
     trainer = pl.Trainer(
-        accelerator="cpu",
+        accelerator="gpu",
         devices=1,
         max_epochs=10,
         precision=16,  # Mixed precision training
