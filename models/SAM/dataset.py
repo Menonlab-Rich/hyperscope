@@ -44,22 +44,10 @@ class CustomSAMDataset(Dataset):
 
         # Apply SAM's image transforms
         if self.transform is not None:
-            image = self.transform.apply_image(image)
-            # Convert mask to tensor and add channel dimension
-            mask = torch.from_numpy(mask).float().unsqueeze(0)  # Add channel dimension
-            mask = F.interpolate(
-                    mask.unsqueeze(0), size=image.shape[:2], mode="nearest"
-            ).squeeze(0)
+            image, mask = self.transform.apply_image(image, mask)
 
-        # Convert image to tensor and adjust dimensions
-        image = torch.from_numpy(image).permute(2, 0, 1).float()  # HWC to CHW
-        image = self._pad_to_multiple_of_64(image)
-        # Ensure mask is float tensor
-        if not isinstance(mask, torch.Tensor):
-            mask = torch.from_numpy(mask).float()
-
-        mask = self._pad_to_multiple_of_64(mask)
-
+        image = torch.from_numpy(image).permute(2, 0, 1).float()
+        mask = torch.from_numpy(mask).float().unsqueeze(0)  # Add channel dimension
         return image, mask
 
     def _pad_to_multiple_of_64(self, image):
