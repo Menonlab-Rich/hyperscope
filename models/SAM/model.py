@@ -11,27 +11,26 @@ import os
 
 
 class SAMDataModule(pl.LightningDataModule):
-    def __init__(self, image_dir, mask_dir, batch_size=1):
+    def __init__(self, image_dir, mask_dir, batch_size=4):
         super().__init__()
-        print(image_dir)
-        print(mask_dir)
+        print("Initializing SAMDataModule")
         self.image_dir = image_dir
         self.mask_dir = mask_dir
         self.batch_size = batch_size
         self.sam = sam_model_registry["vit_h"](checkpoint=config.checkpoint)
         self.sam_transform = ResizeLongestSide(self.sam.image_encoder.img_size)
+        self.dataset = None
 
-    def setup(self, stage=None):
-        self.train_dataset = CustomSAMDataset(
-            self.image_dir, self.mask_dir, transform=self.sam_transform
-        )
-        # Add validation split if needed
+    def setup(self, stage):
+        self.dataset = CustomSAMDataset(self.image_dir, self.mask_dir, self.sam_transform)
 
     def train_dataloader(self):
         return DataLoader(
-            self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=4
+            self.dataset, 
+            batch_size=self.batch_size, 
+            shuffle=True, 
+            num_workers=1
         )
-
 
 class SAMLightningModule(pl.LightningModule):
     def __init__(self, sam_model):
@@ -105,6 +104,7 @@ def train_sam_lightning():
             pl.callbacks.EarlyStopping(monitor="train_loss", patience=10, mode="min"),
         ],
         logger=logger,
+        log_every_n_steps=1,
     )
 
     # Start training
