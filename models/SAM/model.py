@@ -8,19 +8,6 @@ from memory_profiling import *
 import numpy as np
 import gc
 
-def print_gpu_memory(label="Current"):
-    """Print GPU memory usage at a specific point"""
-    torch.cuda.synchronize()
-    print(f"\n[{label}] Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
-    print(f"[{label}] Memory reserved: {torch.cuda.memory_reserved() / 1e9:.2f} GB")
-    print(f"[{label}] Max memory allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
-
-def free_memory():
-    """Attempt to free GPU memory"""
-    gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.synchronize()
-
 class SimplifiedSAMLightningModule(pl.LightningModule):
     def __init__(self, checkpoint_path):
         super().__init__()
@@ -57,7 +44,6 @@ class SimplifiedSAMLightningModule(pl.LightningModule):
         return points
 
 
-    @torch.no_grad
     def _get_predictions(self, img):
         img_np = img.cpu().numpy().transpose(1, 2, 0)
         self.predictor.set_image(img_np)
@@ -79,7 +65,7 @@ class SimplifiedSAMLightningModule(pl.LightningModule):
         )
     
         # Get predicted mask and calculate loss
-        pred_mask = masks_pred[0]  # First mask prediction
+        pred_mask = masks_pred[0].requires_grad_(True)  # First mask prediction
         # Reset predictor to free memory
         self.predictor.reset_image()
         return pred_mask
@@ -94,21 +80,12 @@ class SimplifiedSAMLightningModule(pl.LightningModule):
             img = images[i]
             mask = masks[i]
             
-            # Print memory usage if first image of first few batches
-            if i == 0 and batch_idx < 3:
-                print_gpu_memory(f"Before processing image {i} in batch {batch_idx}")
-            
             pred_mask = self._get_predictions(img)
             # Convert image to numpy for SAM predictor
             loss = F.binary_cross_entropy_with_logits(pred_mask, mask)
             batch_loss += loss
             
             
-            # Attempt to free GPU memory
-            if i == len(images) - 1 and batch_idx < 3:
-                free_memory()
-                print_gpu_memory(f"After processing batch {batch_idx}")
-        
         # Average loss over batch
         avg_loss = batch_loss / len(images)
         self.log("train_loss", avg_loss, on_step=True, on_epoch=True, prog_bar=True)
