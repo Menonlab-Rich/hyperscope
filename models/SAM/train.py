@@ -43,9 +43,11 @@ def train_sam_memory_efficient(config):
     # Create very small batch dataloader
     dataloader = DataLoader(
         dataset,
-        batch_size=1,  # Use batch size of 1
+        batch_size=2,  # Use batch size of 1
         shuffle=True,
         num_workers=7,  
+        pin_memory = True,
+        persistent_workers = True
     )
     
     print_gpu_memory("After dataset/dataloader creation")
@@ -57,10 +59,8 @@ def train_sam_memory_efficient(config):
     trainer = pl.Trainer(
         accelerator="gpu",
         devices=1,
-        max_epochs=5,
+        max_epochs=10,
         precision=32,  # Use mixed precision
-        accumulate_grad_batches=4,  # Accumulate gradients
-        gradient_clip_val=1.0,
         callbacks=[
             pl.callbacks.ModelCheckpoint(
                 monitor="train_loss",
@@ -71,16 +71,13 @@ def train_sam_memory_efficient(config):
             ),
             pl.callbacks.EarlyStopping(
                 monitor="train_loss", 
-                patience=3,
+                patience=5,
                 mode="min"
             ),
         ],
         logger=logger,
-        log_every_n_steps=10,  # Log less frequently
         enable_checkpointing=True,
         # Additional memory optimizations
-        enable_model_summary=False,
-        inference_mode=False,  # More aggressive memory handling
     )
     
     # Print memory before training

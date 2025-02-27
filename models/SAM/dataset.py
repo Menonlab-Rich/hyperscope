@@ -70,8 +70,8 @@ class OptimizedSAMDataset(Dataset):
             image, mask = self.transform(image, mask)
             
         # Convert to PyTorch tensors
-        image = torch.from_numpy(image.transpose(2, 0, 1)).float()  # (C, H, W)
-        mask = torch.from_numpy(mask).float().unsqueeze(0)  # (1, H, W)
+        image = torch.from_numpy(image.copy().transpose(2, 0, 1)).float()  # (C, H, W)
+        mask = torch.from_numpy(mask.copy()).float().unsqueeze(0)  # (1, H, W)
                 
         return image, mask
 
