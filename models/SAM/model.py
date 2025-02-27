@@ -68,6 +68,7 @@ class SimplifiedSAMLightningModule(pl.LightningModule):
         pred_mask = masks_pred[0].requires_grad_(True)  # First mask prediction
         # Reset predictor to free memory
         self.predictor.reset_image()
+        del masks_pred, in_points, in_labels, img_np, points, transformed_points
         return pred_mask
 
 
@@ -112,3 +113,8 @@ class SimplifiedSAMLightningModule(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {"scheduler": scheduler, "monitor": "train_loss"},
         }
+
+        def on_train_epoch_end(self):
+            # Clear any cached memory
+            torch.cuda.empty_cache()
+            gc.collect()
