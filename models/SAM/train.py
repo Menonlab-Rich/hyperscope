@@ -45,8 +45,7 @@ def train_sam_memory_efficient(config):
         dataset,
         batch_size=1,  # Use batch size of 1
         shuffle=True,
-        num_workers=1,  # Minimize workers
-        pin_memory=False  # Disable pin_memory to reduce CUDA memory usage
+        num_workers=7,  
     )
     
     print_gpu_memory("After dataset/dataloader creation")
