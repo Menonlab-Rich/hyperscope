@@ -1,7 +1,7 @@
 # define the root directory that all other paths are relative to
-root_dir: &root_dir ../../data/transfer/preprocess/
-data_dir: !path [*root_dir, "superpixels", "imgs", "32x32"]
-mask_dir: !path [*root_dir, "superpixels", "masks", "32x32"]
+root_dir: &root_dir ~/data/transfer/new_worms/
+data_dir: !path [*root_dir, "superpixels", "imgs", "64x64"]
+mask_dir: !path [*root_dir, "superpixels", "masks", "64x64"]
 test_dir: !path [*root_dir, "tifs"]
 out_dir: &out_dir !path [*root_dir, "output"]
 ckpt_path: /scratch/general/nfs1/u0977428/transfer/preprocess/output/unet-UN-306-epoch=07-val_dice=0.90.ckpt 
@@ -13,8 +13,8 @@ device: cuda # Example: 'cpu' or 'cuda'
 
 classes:
   - "bg"
-  - "625"
-  - "605"
+  - "mkate"
+  - "mcherry"
 weights:
   - 1
   - 1

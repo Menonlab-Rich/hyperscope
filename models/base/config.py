@@ -2,6 +2,7 @@ from abc import abstractmethod, ABC
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from typing import Any
 
 class BaseConfigHandler(ABC):
     '''
@@ -35,7 +36,7 @@ class BaseConfigHandler(ABC):
         for key, value in self.config.items():
             yield key, value
     
-    def __getattr__(self, name: str) -> torch.Any:
+    def __getattr__(self, name: str) -> Any:
         # If the attribute is not found in the class, proxy it to the config
         return getattr(self.config, name)
 
