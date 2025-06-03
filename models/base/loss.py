@@ -1,13 +1,15 @@
-import pytorch_lightning as pl
 import torch
+from torch import nn, Tensor
 import torch.nn.functional as F
-from torch import Tensor, nn
+from typing import Type, Union, Callable
+import pytorch_lightning as pl
 from torchmetrics.functional.segmentation import generalized_dice_score
 
 """Common image segmentation losses.
 """
 
 import torch
+
 from torch.nn import functional as F
 
 
@@ -92,7 +94,7 @@ def jaccard_loss(true, logits, eps=1e-7):
     cardinality = torch.sum(probas + true_1_hot, dims)
     union = cardinality - intersection
     jacc_loss = (intersection / (union + eps)).mean()
-    return 1 - jacc_loss
+    return (1 - jacc_loss)
 
 
 def tversky_loss(true, logits, alpha, beta, eps=1e-7):
@@ -139,7 +141,7 @@ def tversky_loss(true, logits, alpha, beta, eps=1e-7):
     num = intersection
     denom = intersection + (alpha * fps) + (beta * fns)
     tversky_loss = (num / (denom + eps)).mean()
-    return 1 - tversky_loss
+    return (1 - tversky_loss)
 
 
 def ce_dice(true, pred, log=False, w1=1, w2=1):
@@ -155,11 +157,11 @@ def focal_loss(true, pred):
 
 
 class JML1(nn.Module):
-    """
+    '''
     A soft Jaccard loss that uses the L1 norm to calculate the error
     Based on the paper Jaccard Metric Losses: Optimizing the Jaccard Index with Soft Labels
     https://arxiv.org/pdf/2302.05666
-    """
+    '''
 
     def __init__(self, num_classes=2, weights=None, smoothing=0.1, k=3):
         super(JML1, self).__init__()
@@ -167,12 +169,13 @@ class JML1(nn.Module):
         self.smoothing = smoothing
         if weights is not None:
             # assume is weights is not none then it is a tensor
-            self.register_buffer("weights", weights)
+            self.register_buffer('weights', weights)
         self.k = k
 
     def forward(self, y_pred, y_true):
         # For boundary detection
-        maxpool = torch.nn.MaxPool2d(kernel_size=self.k, stride=1, padding=self.k // 2)
+        maxpool = torch.nn.MaxPool2d(
+            kernel_size=self.k, stride=1, padding=self.k//2)
         # Ensure y_pred is in probability form
         y_pred = F.softmax(y_pred, dim=1)
         # One-hot encode y_true, expected y_true to be [batch_size, height, width] for image data
@@ -184,7 +187,8 @@ class JML1(nn.Module):
         y_true = y_true.permute(0, 3, 2, 1)
         y_true_pooled = maxpool(y_true)
         boundaries = (y_true_pooled > y_true).any(dim=1, keepdim=True)
-        smoothed_boundaries = y_true * (1 - self.smoothing) + (self.smoothing / self.num_classes)
+        smoothed_boundaries = y_true * (1 - self.smoothing) + (
+            self.smoothing / self.num_classes)
         labels = torch.where(boundaries, smoothed_boundaries, y_true)
 
         # Normalize over the spatial dimensions
@@ -192,9 +196,11 @@ class JML1(nn.Module):
         pred_norm = torch.norm(y_pred, p=1, dim=[2, 3])
         err_norm = torch.norm(labels - y_pred, p=1, dim=[2, 3])
 
-        jaccard_index = (labels_norm + pred_norm - err_norm) / (labels_norm + pred_norm + err_norm)
+        jaccard_index = (
+            labels_norm + pred_norm - err_norm) \
+            / (labels_norm + pred_norm + err_norm)
 
-        if getattr(self, "weights", None) is not None:
+        if getattr(self, 'weights', None) is not None:
             jaccard_index = self.weights.unsqueeze(0) * jaccard_index
         # The loss is 1 - the average Jaccard index over the batch and classes
         # Averaging over both batch and classes
@@ -202,7 +208,8 @@ class JML1(nn.Module):
 
 
 class WeightedComboLoss(nn.Module):
-    def __init__(self, loss_a: nn.Module, loss_b: nn.Module, alpha=0.5, beta=0.5) -> None:
+    def __init__(self, loss_a: nn.Module, loss_b: nn.Module, alpha=0.5,
+                 beta=0.5) -> None:
         super(WeightedComboLoss, self).__init__()
         self.loss_a = loss_a
         self.loss_b = loss_b
@@ -210,7 +217,9 @@ class WeightedComboLoss(nn.Module):
         self.beta = beta
 
     def forward(self, y_pred, y_true):
-        return self.loss_a(y_pred, y_true) * self.alpha + self.loss_b(y_pred, y_true) * self.beta
+        return self.loss_a(
+            y_pred, y_true) * self.alpha + self.loss_b(
+            y_pred, y_true) * self.beta
 
 
 class PowerJaccardLoss(nn.Module):
@@ -219,7 +228,7 @@ class PowerJaccardLoss(nn.Module):
         self.num_classes = num_classes
         # If weights are not provided, use equal weighting
         if weights is not None:
-            self.register_buffer("weights", weights)
+            self.register_buffer('weights', weights)
         self.smoothing = smoothing
         self.power = power
 
@@ -244,7 +253,7 @@ class PowerJaccardLoss(nn.Module):
         # Calculate the modified Jaccard index per example in the batch
         jaccard_index = dot_product / (dot_product + l1_norm + self.smoothing)
 
-        if getattr(self, "weights", None) is not None:
+        if getattr(self, 'weights', None) is not None:
             jaccard_index = self.weights * jaccard_index
         # The loss is 1 - the average Jaccard index over the batch and classes
         # Averaging over both batch and classes
@@ -253,7 +262,7 @@ class PowerJaccardLoss(nn.Module):
 
 class WeightedMSELoss(nn.Module):
     def __init__(self, weights=None, scale=1.0):
-        """
+        '''
         Create a weighted MSE loss function
 
         Parameters:
@@ -268,30 +277,28 @@ class WeightedMSELoss(nn.Module):
         -------
         AssertionError: If the input and target are not on the same device
         AssertionError: If the weights are provided and not on the same device as the input
-        """
+        '''
         super(WeightedMSELoss, self).__init__()
-        self.register_buffer("weight", weights)
-        self.register_buffer("scale", torch.tensor(scale))  # Register the scale factor
+        self.register_buffer('weight', weights)
+        self.register_buffer('scale', torch.tensor(scale)
+                             )  # Register the scale factor
 
     def forward(self, input, target, classes=None):
-        assert input.device == target.device, "Input and target must be on the same device"
+        assert input.device == target.device, 'Input and target must be on the same device'
         if self.weight is not None:
-            assert (
-                self.weight.device == input.device
-            ), "Weights must be on the same device as input"
+            assert self.weight.device == input.device, 'Weights must be on the same device as input'
             # Normalize the weights to sum to 1
             # map the classes to the weights
             if classes is not None:
                 device = self.weight.device
                 weights = torch.tensor(
-                    [self.weight[cls] for cls in classes], dtype=torch.float
-                ).to(
-                    device
-                )  # Get the weights for the classes
+                    [self.weight[cls] for cls in classes],
+                    dtype=torch.float).to(device)  # Get the weights for the classes
 
             normalized_weight = weights / weights.sum()
             # Expand the weights to the same shape as the input for broadcasting
-            normalized_weight = normalized_weight.view(-1, 1, 1, 1).expand_as(input)
+            normalized_weight = normalized_weight.view(
+                -1, 1, 1, 1).expand_as(input)
             # Compute the weighted MSE
             loss = (normalized_weight * (input - target) ** 2).mean()
         else:
@@ -300,18 +307,18 @@ class WeightedMSELoss(nn.Module):
         return loss * self.scale  # Scale the loss by the scale factor
 
 
-def with_loss_fn(
-    loss_fn: Union[str, Callable, nn.Module], **kwargs
-) -> Callable[[Type[pl.LightningModule]], Type[pl.LightningModule]]:
-    """
+def with_loss_fn(loss_fn: Union[str, Callable, nn.Module],
+                 **kwargs) -> Callable[[Type[pl.LightningModule]],
+                                       Type[pl.LightningModule]]:
+    '''
     A decorator to add a loss function to a LightningModule
-    """
-
+    '''
     def decorator(cls: Type[pl.LightningDataModule]) -> Type[pl.LightningDataModule]:
         if isinstance(loss_fn, str):
             loss_fn_instance = globals()[loss_fn](**kwargs)
         else:
-            loss_fn_instance = loss_fn(**kwargs) if callable(loss_fn) else loss_fn
+            loss_fn_instance = loss_fn(
+                **kwargs) if callable(loss_fn) else loss_fn
 
         class WrappedClass(cls, pl.LightningModule):
             def __init__(self, *args, **init_kwargs):
@@ -323,7 +330,6 @@ def with_loss_fn(
         return WrappedClass
 
     return decorator
-
 
 class BinaryDiceLoss(nn.Module):
     """Dice loss of binary class
@@ -339,8 +345,7 @@ class BinaryDiceLoss(nn.Module):
     Raise:
         Exception if unexpected reduction
     """
-
-    def __init__(self, smooth=1, p=2, reduction="mean"):
+    def __init__(self, smooth=1, p=2, reduction='mean'):
         super(BinaryDiceLoss, self).__init__()
         self.smooth = smooth
         self.p = p
@@ -351,29 +356,19 @@ class BinaryDiceLoss(nn.Module):
         predict = predict.contiguous().view(predict.shape[0], -1)
         target = target.contiguous().view(target.shape[0], -1)
 
-        intersection = torch.sum(torch.mul(predict, target), dim=1)
+        num = torch.sum(torch.mul(predict, target), dim=1) + self.smooth
+        den = torch.sum(predict.pow(self.p) + target.pow(self.p), dim=1) + self.smooth
 
-        # Denominator terms
-        sum_predict_p = torch.sum(predict.pow(self.p), dim=1)
-        # For binary 0/1 targets, target.pow(self.p) == target for p >= 1.
-        # If target can have values other than 0/1 (not typical for one-hot slices), .pow(self.p) is important.
-        sum_target_p = torch.sum(target.pow(self.p), dim=1)
+        loss = 1 - num / den
 
-        # Standard Dice coefficient
-        dice_coeff = (2.0 * intersection + self.smooth) / (
-            sum_predict_p + sum_target_p + self.smooth
-        )
-
-        loss = 1.0 - dice_coeff
-
-        if self.reduction == "mean":
+        if self.reduction == 'mean':
             return loss.mean()
-        elif self.reduction == "sum":
+        elif self.reduction == 'sum':
             return loss.sum()
-        elif self.reduction == "none":
+        elif self.reduction == 'none':
             return loss
         else:
-            raise Exception("Unexpected reduction {}".format(self.reduction))
+            raise Exception('Unexpected reduction {}'.format(self.reduction))
 
 
 class DiceLoss(nn.Module):
@@ -387,7 +382,6 @@ class DiceLoss(nn.Module):
     Returns:
         Loss tensor according to BinaryDiceLoss
     """
-
     def __init__(self, weight=None, ignore_index=None, **kwargs):
         super(DiceLoss, self).__init__()
         self.kwargs = kwargs
@@ -395,13 +389,12 @@ class DiceLoss(nn.Module):
         self.ignore_index = ignore_index
 
     def forward(self, predict, target):
-        assert predict.shape[0] == target.shape[0], "predict & target batch size do not match"
-        if target.dim() == 4 and target.shape[1] == 1:
-            target = target.squeeze(1)  # Now target is [N, H, W]
+        assert predict.shape[0] == target.shape[0], 'predict & target batch size do not match'
         num_classes = predict.shape[1]
+        target = target.squeeze(1) # [N, 1, H, W] -> [N, H, W]
 
         # One-hot encode the target tensor if necessary
-        if target.dim() == 3:  # [N, H, W]
+        if target.dim() == 3: # [N, H, W]
             target = F.one_hot(target, num_classes).permute(0, 3, 1, 2).float()
 
         dice = BinaryDiceLoss(**self.kwargs)
@@ -412,30 +405,12 @@ class DiceLoss(nn.Module):
             if i != self.ignore_index:
                 dice_loss = dice(predict[:, i], target[:, i])
                 if self.weight is not None:
-                    assert (
-                        self.weight.shape[0] == num_classes
-                    ), "Expect weight shape [{}], got [{}]".format(
-                        num_classes, self.weight.shape[0]
-                    )
+                    assert self.weight.shape[0] == num_classes, \
+                        'Expect weight shape [{}], got [{}]'.format(num_classes, self.weight.shape[0])
                     dice_loss *= self.weight[i]
                 total_loss += dice_loss
 
-        num_contributing_classes = 0
-        for i in range(num_classes):
-            if i != self.ignore_index:
-                if (
-                    self.weight is not None and self.weight[i] == 0
-                ):  # Also consider zero-weighted classes
-                    continue
-                num_contributing_classes += 1
-
-        if num_contributing_classes > 0:
-            return total_loss / num_contributing_classes
-        else:
-            return torch.tensor(
-                0.0, device=predict.device, dtype=predict.dtype
-            )  # Or handle as appropriate
-
+        return total_loss / num_classes
 
 # Example usage
 if __name__ == "__main__":
