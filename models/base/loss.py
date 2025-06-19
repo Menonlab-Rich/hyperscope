@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 from torchmetrics.functional.segmentation import generalized_dice_score
+from typing import *
 
 """Common image segmentation losses.
 """

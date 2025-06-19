@@ -1,4 +1,5 @@
 import torch
+import random
 import torch.utils.data as data
 from albumentations.pytorch import ToTensorV2
 from typing import Callable, Sequence, Any, Dict
@@ -23,6 +24,28 @@ class GenericDataLoader():
     def __iter__(self):
         for i in range(len(self)):
             yield self[i]
+
+    def fold(self, k: int, seed: int = 16):
+        """
+        Split dataset IDs into k folds for cross-validation using sklearn's KFold.
+
+        Parameters:
+            k (int): Number of folds to create.
+            seed (int): Seed for the random number generator to ensure reproducibility.
+
+        Returns:
+            A generator that yields (train_loader, validation_loader) for each fold.
+        """
+        if k <= 1:
+            raise ValueError("Number of folds (k) must be greater than 1.")
+            
+        ids = np.array(self.get_ids())
+        kf = KFold(n_splits=k, shuffle=True, random_state=seed)
+
+        for train_indices, val_indices in kf.split(ids):
+            train_ids = ids[train_indices]
+            val_ids = ids[val_indices]
+            yield self.post_split(train_ids, val_ids)
 
     def split(self, train_ratio: float, seed=16) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -53,21 +76,6 @@ class GenericDataLoader():
 
         return self.post_split(train_ids, val_ids)
 
-    def fold(self, k=5, shuffle=True):
-        """
-        Split dataset IDs into k folds for cross-validation.
-
-        Parameters:
-            k (int): Number of folds to create.
-
-        Returns:
-            A list of tuples containing the output of self.post_split for each fold.
-            List[Tuple[GenericDataLoader, GenericDataLoader]]
-        """
-        ids = self.get_ids()
-        # Set seed for reproducibility
-        kf = KFold(n_splits=k, shuffle=shuffle, random_state=16)
-        return [self.post_split(train_ids, val_ids) for train_ids, val_ids in kf.split(ids)]
 
     def post_split(self, train_ids, val_ids):
         """

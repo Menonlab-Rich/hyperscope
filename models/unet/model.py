@@ -15,12 +15,13 @@ from torchmetrics import MeanMetric
 from neptune.types import File
 from warnings import warn
 from torchmetrics.classification import MulticlassConfusionMatrix
-
+import matplotlib
+matplotlib.use('Agg') # Prevent problems with tkinter
 
 class UNetLightning(pl.LightningModule):
     def __init__(self, n_channels=1, n_classes=3, bilinear=False,
                  learning_rate=1e-5, weight_decay=1e-9, momentum=0.8,
-                 amp=False, batch_size=None):
+                 amp=False, batch_size=None): 
         super(UNetLightning, self).__init__()
         self.batch_size=batch_size
         self.model = UNet(n_channels, n_classes, bilinear)
@@ -30,7 +31,9 @@ class UNetLightning(pl.LightningModule):
         self.amp = amp
         self.n_classes = n_classes
         self.criterion = nn.CrossEntropyLoss() if n_classes > 1 else nn.BCEWithLogitsLoss()
+        self.criterion.eval()
         self.dice_loss = DiceLoss()  # 0 is the background class
+        self.dice_loss.eval()
         self.val_accuracy = GeneralizedDiceScore(
             self.n_classes)
         self.train_loss_metric = MeanMetric()
@@ -56,7 +59,7 @@ class UNetLightning(pl.LightningModule):
         if self.n_classes == 1:
             masks_pred = masks_pred.squeeze(1)
         criterion_loss = self.criterion(masks_pred, masks_true)
-        dloss = self.dice_loss(masks_pred, masks_true)
+        dloss = self.dice_loss(masks_pred, masks_true) 
         return criterion_loss + dloss
 
     def training_step(self, batch, batch_idx):

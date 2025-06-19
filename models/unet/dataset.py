@@ -1,4 +1,5 @@
 from base.dataset import GenericDataLoader, Transformer, GenericDataset
+from sklearn.model_selection import KFold
 from pytorch_lightning import LightningDataModule
 from PIL import Image
 import numpy as np
@@ -15,7 +16,7 @@ class InputLoader(GenericDataLoader):
     Loader for input files (images) to be used as input to the model.
     """
 
-    def __init__(self, directory, n_files=None, files=None):
+    def __init__(self, directory, n_files=None, files=None, shape=(64,64)):
         """
         Initialize the InputLoader.
 
@@ -26,6 +27,7 @@ class InputLoader(GenericDataLoader):
         """
 
         self.directory = directory
+        self.shape = shape
         if files is not None:
             self.files = files
         elif not path.isdir(directory):
@@ -35,7 +37,7 @@ class InputLoader(GenericDataLoader):
         else:
             self.files = sorted(
                 [f for f in listdir(directory)
-                 if f.endswith('.tif') or f.endswith('.tiff')])
+                 if f.endswith('.tif') or f.endswith('.tiff') or f.endswith('np') or f.endswith('npy')])
         if n_files is not None:
             self.files = self.files[:n_files]
 
@@ -75,7 +77,12 @@ class InputLoader(GenericDataLoader):
         np.ndarray: Numpy array of the image.
         """
         file = path.basename(file)
-        return np.array(Image.open(path.join(self.directory, file))), file
+        try:
+            if file.endswith('.np') or file.endswith('.npy'):
+                return np.load(path.join(self.directory, file)), file
+            return np.array(Image.open(path.join(self.directory, file))), file
+        except:
+            return np.zeros(self.shape)
 
     def post_split(self, train_ids, val_ids):
         """
@@ -102,7 +109,7 @@ class TargetLoader(GenericDataLoader):
     Loader for target files (class labels) corresponding to the input files.
     """
 
-    def __init__(self, directory, n_files=None, files=None):
+    def __init__(self, directory, n_files=None, files=None, shape=(64,64)):
         """
         Initialize the TargetLoader.
 
@@ -112,6 +119,7 @@ class TargetLoader(GenericDataLoader):
         files (List[str]): List of files to use (optional).
         """
         self.directory = directory
+        self.shape = shape
         if files is not None:
             self.files = files
         elif not path.isdir(directory):
@@ -147,7 +155,7 @@ class TargetLoader(GenericDataLoader):
         List[str]: List of file names.
         """
         if i is not None:
-            return self.files[i:i+batch_size - 1]
+            return self.files[i:i+batch_size]
         return self.files
 
     def _read(self, file: str) -> int:
@@ -162,9 +170,18 @@ class TargetLoader(GenericDataLoader):
         """
         file = path.basename(file)
         if file.endswith('.npy'):
-            return np.load(path.join(self.directory, file))
+            try:
+                return np.load(path.join(self.directory, file))
+            except Exception as e:
+                warnings.warn("There was a problem reading the input file. To prevent a hard crash, an empty array of the appropriate shape will be returned.")
+                warnings.warn("If this occurs freqently it may result in innaccuracies during training. Please review your dataset and retrain ASAP.")
+                warnings.warn(str(e))
+                return np.zeros(self.shape)
         elif file.endswith('.npz'):
-            data = np.load(path.join(self.directory, file))
+            try:
+                data = np.load(path.join(self.directory, file))
+            except:
+                return np.zeros(self.shape)
             if 'mask' in data:
                 return data['mask']
             return data['arr_0']
@@ -246,22 +263,47 @@ class UNetDataModule(LightningDataModule):
         no_split (bool): If True, do not split the data (default: False).
         """
         super().__init__()
-        self.input_loader = self._load_if_bytes(input_loader)
-        self.target_loader = self._load_if_bytes(target_loader)
+        self.input_loader: InputLoader = self._load_if_bytes(input_loader)
+        self.target_loader: TargetLoader = self._load_if_bytes(target_loader)
         self.test_loaders = test_loaders
         self.transforms = transforms
         self.batch_size = batch_size
         self.n_workers = n_workers
         self.prediction_loader = prediction_loader
         self.file_prefix = prefix
+        self.k_folds = False
+        self._folds = []
         if input_loader is None or target_loader is None:
             # If input_loader or target_loader is not provided, we are probably loading from a state dict
             return
         if not no_split:
-            self.train_inputs, self.val_inputs = self._split_data(
-                self.input_loader, split_ratio)
-            self.train_targets, self.val_targets = self._split_data(
-                self.target_loader, split_ratio)
+            if split_ratio > 1:
+                # If the ratio is a whole value float, the int and float versions will be ==.
+                # This is more flexible than simply type checking
+                k = int(split_ratio)
+                self.k_folds = True
+
+                input_ids = input_loader.get_ids()
+                target_ids = target_loader.get_ids()
+                # Basic check to ensure they are parallel
+                if len(input_ids) != len(target_ids):
+                    raise ValueError("Input and Target loaders have different number of files.")
+
+                # 2. Create ONE KFold instance to generate synchronized splits
+                kf = KFold(n_splits=k, shuffle=True, random_state=42) # Use a fixed random_state!
+
+                # 3. Store the generated (train_indices, val_indices) pairs.
+                #    This avoids the generator and StopIteration problem.
+                self._folds = list(kf.split(input_ids))
+                self._current_fold_index = 0
+                
+                self.setup_fold() # Call the new method to setup the first fold
+
+            else:
+                self.train_inputs, self.val_inputs = self._split_data(
+                    self.input_loader, split_ratio)
+                self.train_targets, self.val_targets = self._split_data(
+                    self.target_loader, split_ratio)
         else:
             self.train_inputs = self.val_inputs = self.input_loader
             self.train_targets = self.val_targets = self.target_loader
@@ -269,6 +311,39 @@ class UNetDataModule(LightningDataModule):
         self.save_hyperparameters({
             "batch_size": batch_size, "n_workers": n_workers,
         })
+
+    def setup_fold(self):
+        """Sets up the dataloaders for the current fold index."""
+        if not self.k_folds:
+            raise ValueError("Not in k-fold mode.")
+
+        if self._current_fold_index >= len(self._folds):
+            warnings.warn("All k-folds have been used. Resetting to fold 0.")
+            self._current_fold_index = 0
+
+        # Get the pre-computed indices for the current fold
+        train_indices, val_indices = self._folds[self._current_fold_index]
+
+        # Get the actual file IDs using the synchronized indices
+        input_ids = np.array(self.input_loader.get_ids())
+        target_ids = np.array(self.target_loader.get_ids())
+
+        train_input_ids, val_input_ids = input_ids[train_indices], input_ids[val_indices]
+        train_target_ids, val_target_ids = target_ids[train_indices], target_ids[val_indices]
+        
+        # Use post_split to create the new loaders for this fold
+        self.train_inputs, self.val_inputs = self.input_loader.post_split(train_input_ids, val_input_ids)
+        self.train_targets, self.val_targets = self.target_loader.post_split(train_target_ids, val_target_ids)
+
+        print(f"--- Setting up for fold {self._current_fold_index + 1}/{len(self._folds)} ---")
+        
+        # You might need to re-run self.setup('fit') if you call this mid-training
+        self.setup('fit') 
+
+    def next_fold(self):
+        """Rotates to the next fold."""
+        self._current_fold_index += 1
+        self.setup_fold()
 
     def _split_data(self, loader: GenericDataLoader, split_ratio: float):
         """

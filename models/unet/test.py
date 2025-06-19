@@ -6,11 +6,11 @@ from pytorch_lightning import LightningModule
 
 from pytorch_lightning import LightningDataModule
 
-from config import YAMLConfig, CONFIG_FILE_PATH
+from config import Config, CONFIG_FILE_PATH
 
 
 
-def load_model(ckpt_path: str, config: YAMLConfig) -> Tuple[LightningModule, LightningDataModule]:
+def load_model(ckpt_path: str, config: Config) -> Tuple[LightningModule, LightningDataModule]:
 
 
     from model import UNetLightning
@@ -79,7 +79,7 @@ def load_model(ckpt_path: str, config: YAMLConfig) -> Tuple[LightningModule, Lig
 
 
 
-def main(config: YAMLConfig):
+def main(config: Config):
     import os
 
 
@@ -141,7 +141,7 @@ def main(config: YAMLConfig):
 
 if __name__ == '__main__':
 
-    cfg = YAMLConfig(CONFIG_FILE_PATH)
+    cfg = Config(CONFIG_FILE_PATH)
 
 
     main(cfg)

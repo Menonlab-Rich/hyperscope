@@ -1,14 +1,14 @@
 # define the root directory that all other paths are relative to
-root_dir: &root_dir ~/data/transfer/worms/
-data_dir: !path [*root_dir, "superpixels", "imgs", "64x64"]
-mask_dir: !path [*root_dir, "superpixels", "masks", "64x64"]
-test_dir: !path [*root_dir, "tifs"]
+root_dir: &root_dir ~/data/worms4/
+data_dir: !path [*root_dir, "images"]
+mask_dir: !path [*root_dir, "masks"]
 out_dir: &out_dir !path ["~/data", "output"]
-ckpt_path: /scratch/general/nfs1/u0977428/output/unet-UN-427-epoch=07-val_dice=0.96.ckpt 
+ckpt_path: /scratch/general/nfs1/u0977428/output/unet-UN-507-epoch=11-val_dice=0.55.ckpt
+split_ratio: 0.5
 input_channels: 1 
-learning_rate: 1.e-5
-batch_size: 64 
-epochs: 10
+learning_rate: 1.e-3
+batch_size: 4 
+epochs: 15 
 device: cuda # Example: 'cpu' or 'cuda'
 
 classes:
@@ -18,12 +18,11 @@ classes:
 weights:
   - 0.3
   - 1
-  - 1
+  - 1.3
 gpus: 1 # How many gpus to use
-precision: '32-true' # 16, 32, 64, 'full', 'double', '16-mixed', '16-bf16'
+precision: '16-mixed' # 16, 32, 64, 'full', 'double', '16-mixed', '16-bf16'
 accelerator: 'auto' # 'cpu', 'gpu', 'tpu', 'amp', 'auto'
 encoder_path: !path [*root_dir, '..', 'encoder', 'best_model.ckpt']
-k_folds: 5 # Number of folds to perform during validation step
 debug:
   enable: false # prefer to pass the debug flag at the cli
   fast: true

@@ -8,10 +8,10 @@ from pytorch_lightning.callbacks import ModelCheckpoint, StochasticWeightAveragi
 from pytorch_lightning.loggers import NeptuneLogger
 from model import UNetLightning
 from dataset import UNetDataModule, InputLoader, TargetLoader
-from config import YAMLConfig, CONFIG_FILE_PATH
+from config import Config, CONFIG_FILE_PATH
 
 
-def main(config: YAMLConfig, debug: bool = False, manual: bool = False):
+def main(config: Config, debug: bool = False, manual: bool = False):
 
     torch.cuda.empty_cache()
 
@@ -25,7 +25,7 @@ def main(config: YAMLConfig, debug: bool = False, manual: bool = False):
         batch_size=1 if manual else config.batch_size,
         transforms=config.transform,
         n_workers=8,
-        split_ratio=0.5,
+        split_ratio=config.split_ratio,
     )
 
     logger = NeptuneLogger(
@@ -59,11 +59,11 @@ def main(config: YAMLConfig, debug: bool = False, manual: bool = False):
         "max_epochs": config.epochs,
         "precision": config.precision,
         "accelerator": config.accelerator,
-        "callbacks": [checkpoint_cb, swa],
+        "callbacks": [swa],
         "gradient_clip_val": 1.0,
-        "accumulate_grad_batches": 5,
-        # "limit_train_batches": 1,
-        "limit_val_batches": 0.5,
+        "accumulate_grad_batches": 3,
+        "limit_train_batches": 0.05,
+        "limit_val_batches": 0.05,
         "devices": 1,
     }
 
@@ -116,9 +116,26 @@ def main(config: YAMLConfig, debug: bool = False, manual: bool = False):
             logger.log_metrics({"epoch": epoch}, step=epoch)
 
     else:
-        trainer.fit(model, data_module)
+        if config.split_ratio > 1:
+            k = int(config.split_ratio)
+            for i in range(k):
+                model = UNetLightning(
+                    n_channels=config.input_channels,
+                    n_classes=len(config.classes),
+                    learning_rate=config.learning_rate,
+                    batch_size=config.batch_size,
+                )
 
-        # trainer.test(model, datamodule=data_module)
+                trainer = Trainer(**trainer_args)
+                data_module.setup_fold(i)
+                trainer.fit(model, data_module)
+                trainer.test(model, datamodule=data_module)
+        else:
+            trainer_args['callbacks'].append(checkpoint_cb)
+            trainer = Trainer(**trainer_args)
+            trainer.fit(model, data_module)
+            trainer.test(model, datamodule=data_module)
+
 
 
 if __name__ == "__main__":
@@ -126,6 +143,6 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
-    config = YAMLConfig(CONFIG_FILE_PATH)
+    config = Config(CONFIG_FILE_PATH)
 
     main(config, debug=args.debug, manual=False)

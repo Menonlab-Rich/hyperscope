@@ -9,10 +9,15 @@ from albumentations.pytorch import ToTensorV2
 from base.config import BaseConfigHandler
 from base.dataset import Transformer
 from sklearn.decomposition import PCA
+from typing import Any
 
 CONFIG_FILE_PATH = "config.yml"
 
 # path custom tag handler
+
+class SuperPixelTransform():
+    def __call__(self, *args: Any, **kwds: Any) -> Any:
+        pass
 
 
 def path(loader, node):
