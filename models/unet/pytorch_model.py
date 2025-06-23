@@ -8,9 +8,10 @@ Repo: https://github.com/milesial/Pytorch-UNet/tree/master
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 
-class PositionalEncoding(nn.Module):
+class PositionalEncoder(nn.Module):
     def __init__(self, embed_dim, shape=(64, 64)):
         super().__init__()
         self.height_embedding = nn.Embedding(shape[0], embed_dim)
@@ -50,8 +51,10 @@ class TransformerBlock(nn.Module):
     A self-attention transformer block applied to the skip connection feature map (x2).
     """
 
-    def __init__(self, in_channels, num_heads=8, shape=(64, 64)):
+    def __init__(self, in_channels, num_heads=8)
+
         super().__init__()
+
         # Ensure the channel dimension is divisible by the number of heads
         if in_channels % num_heads != 0:
             raise ValueError("in_channels must be divisible by num_heads")
@@ -59,7 +62,6 @@ class TransformerBlock(nn.Module):
         self.in_channels = in_channels
         self.num_heads = num_heads
         self.hidden_channels_ff = 4 * in_channels
-        self.pos_encoder = PositionalEncoding(in_channels, shape)
 
         self.norm_1 = nn.LayerNorm(in_channels)
         self.norm_2 = nn.LayerNorm(in_channels)
@@ -78,20 +80,11 @@ class TransformerBlock(nn.Module):
         )
 
     def forward(self, x):
-        # Input x has shape (B, C, H, W)
-        B, C, H, W = x.shape
-
-        # Reshape for attention: (B, C, H, W) -> (B, C, H*W) -> (H*W, B, C)
-        # H*W is the sequence length, B is the batch size, C is the embedding dimension
-        x_seq = x.view(B, C, H * W).permute(2, 0, 1)  # (Seq, Batch, Emb)
-
         # Store the original input to add as a residual connection later
-        x_residual = x_seq
+        x_residual = x
 
         # Normalize, apply position embeddings, and attention
-        x_seq = self.norm_1(x_seq)
-        pos_embedding = self.pos_encoder((H, W), x.device)
-        x_seq = x_seq + pos_embedding.unsqueeze(1)
+        x_seq = self.norm_1(x)
 
         # Apply self-attention. query, key, and value are all the same.
         attn_output, _ = self.attention(query=x_seq, key=x_seq, value=x_seq)
@@ -103,10 +96,8 @@ class TransformerBlock(nn.Module):
         ff_output = self.feed_forward(x_seq)
 
         # Add residual connection
-        x_seq = ff_output + x_residual_ff
+        x_out = ff_output + x_residual_ff
 
-        # Reshape back to image format: (H*W, B, C) -> (B, C, H*W) -> (B, C, H, W)
-        x_out = x_seq.permute(1, 2, 0).view(B, C, H, W)
 
         return x_out
 
@@ -148,7 +139,6 @@ class Up(nn.Module):
     def __init__(self, in_channels, out_channels, bilinear=True, shape=(64, 64)):
         super().__init__()
 
-        self.attention = TransformerBlock(in_channels=out_channels, num_heads=8, shape=shape)
         # if bilinear, use the normal convolutions to reduce the number of channels
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
@@ -167,8 +157,7 @@ class Up(nn.Module):
         # if you have padding issues, see
         # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
         # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
-        x2_attn = self.attention(x2)
-        x = torch.cat([x2_attn, x1], dim=1)
+        x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
 
@@ -180,9 +169,64 @@ class OutConv(nn.Module):
     def forward(self, x):
         return self.conv(x)
 
+class UFormer(nn.Module):
+    def __init__(self, n_channels, shape) -> None:
+        super().__init__()
+        self.encoder = PositionalEncoder(n_channels, shape = shape)
+        self.projector = nn.Linear(self.n_channels, self.n_channels)
+        self.t1 = TransformerBlock(n_channels)
+        self.t2 = TransformerBlock(n_channels)
+        self.t3 = TransformerBlock(n_channels)
+        self.t4 = TransformerBlock(n_channels)
+        self.t5 = TransformerBlock(n_channels)
+        self.t6 = TransformerBlock(n_channels)
+        self.t7 = TransformerBlock(n_channels)
+        self.t8 = TransformerBlock(n_channels)
+        self.t9 = TransformerBlock(n_channels)
+        self.t10 = TransformerBlock(n_channels)
+        self.t11 = TransformerBlock(n_channels)
+        self.t12 = TransformerBlock(n_channels)
+
+    def _patches(self, x):
+        """
+        Converts the feature map from the CNN bottleneck into a sequence of patches.
+        Args:
+            x: Input feature map with shape (B, C, H, W)
+        Returns:
+            A tensor of patches with shape (Seq, B, C), where Seq = H * W.
+        """
+        B, C, H, W = x.shape
+        # Flatten the spatial dimensions: (B, C, H, W) -> (B, C, H*W)
+        patches = x.view(B, C, H * W)
+        
+        # Permute to get the sequence format required by the Transformer:
+        # (B, C, H*W) -> (H*W, B, C)
+        patches = patches.permute(2, 0, 1)
+        
+        return patches
+
+    def forward(self, x):
+        patches = self._patches(x)
+        projection = self.projecter(patches)
+        embeddings = self.encoder(patches)
+        out = projection + embeddings
+        out = self.t1(out)
+        out = self.t2(out)
+        out = self.t3(out)
+        out = self.t4(out)
+        out = self.t5(out)
+        out = self.t6(out)
+        out = self.t7(out)
+        out = self.t8(out)
+        out = self.t9(out)
+        out = self.t10(out)
+        out = self.t12(out)
+        return out
+
+
 
 class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, bilinear=False):
+    def __init__(self, n_channels, n_classes, bilinear=False, input_shape=(128,128)):
         super(UNet, self).__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
@@ -194,12 +238,14 @@ class UNet(nn.Module):
         self.down3 = Down(256, 512)
         factor = 2 if bilinear else 1
         self.down4 = Down(512, 1024 // factor) 
+        
+        final_shape = list(np.array(input_shape, dtype=np.uint8) // 16)
+        self.transu = UFormer(1024 if bilinear else 1024 // factor, final_shape) 
         self.up1 = Up(1024, 512 // factor, bilinear, (8, 8))
         self.up2 = Up(512, 256 // factor, bilinear, (16, 16))
         self.up3 = Up(256, 128 // factor, bilinear, (32, 32))
         self.up4 = Up(128, 64, bilinear, (64, 64))
         self.outc = OutConv(64, n_classes)
-        self.attention = TransformerBlock(in_channels=1024 // factor, shape=(4, 4))
 
     def forward(self, x):
         x1 = self.inc(x)
@@ -207,6 +253,7 @@ class UNet(nn.Module):
         x3 = self.down2(x2)
         x4 = self.down3(x3)
         x5 = self.down4(x4)
+        x5 = self.transu(x5)
         x = self.up1(x5, x4)
         x = self.up2(x, x3)
         x = self.up3(x, x2)
