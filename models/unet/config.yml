@@ -1,5 +1,5 @@
 # define the root directory that all other paths are relative to
-root_dir: &root_dir ~/data/worms4/
+root_dir: &root_dir ~/data/worms6/
 data_dir: !path [*root_dir, "images"]
 mask_dir: !path [*root_dir, "masks"]
 out_dir: &out_dir !path ["~/data", "output"]
@@ -8,7 +8,7 @@ split_ratio: 0.5
 input_channels: 1 
 learning_rate: 1.e-3
 batch_size: 4 
-epochs: 15 
+epochs: 10
 device: cuda # Example: 'cpu' or 'cuda'
 
 classes:
@@ -18,7 +18,7 @@ classes:
 weights:
   - 0.3
   - 1
-  - 1.3
+  - 1
 gpus: 1 # How many gpus to use
 precision: '16-mixed' # 16, 32, 64, 'full', 'double', '16-mixed', '16-bf16'
 accelerator: 'auto' # 'cpu', 'gpu', 'tpu', 'amp', 'auto'

@@ -14,10 +14,12 @@ import numpy as np
 class PositionalEncoder(nn.Module):
     def __init__(self, embed_dim, shape=(64, 64)):
         super().__init__()
+        self.shape = shape
         self.height_embedding = nn.Embedding(shape[0], embed_dim)
         self.width_embedding = nn.Embedding(shape[1], embed_dim)
 
-    def forward(self, shape, device):
+    def forward(self, device):
+        shape = self.shape
         rows = torch.arange(shape[0], device=device)
         cols = torch.arange(shape[1], device=device)
         row_embed = self.height_embedding(rows)
@@ -51,7 +53,7 @@ class TransformerBlock(nn.Module):
     A self-attention transformer block applied to the skip connection feature map (x2).
     """
 
-    def __init__(self, in_channels, num_heads=8)
+    def __init__(self, in_channels, num_heads=8):
 
         super().__init__()
 
@@ -172,6 +174,8 @@ class OutConv(nn.Module):
 class UFormer(nn.Module):
     def __init__(self, n_channels, shape) -> None:
         super().__init__()
+        self.n_channels = n_channels
+        self.shape = shape
         self.encoder = PositionalEncoder(n_channels, shape = shape)
         self.projector = nn.Linear(self.n_channels, self.n_channels)
         self.t1 = TransformerBlock(n_channels)
@@ -196,6 +200,7 @@ class UFormer(nn.Module):
             A tensor of patches with shape (Seq, B, C), where Seq = H * W.
         """
         B, C, H, W = x.shape
+
         # Flatten the spatial dimensions: (B, C, H, W) -> (B, C, H*W)
         patches = x.view(B, C, H * W)
         
@@ -205,10 +210,30 @@ class UFormer(nn.Module):
         
         return patches
 
+    def _unpatches(self, patches):
+        """
+        Converts a sequence of patches back into a feature map.
+        Args:
+            patches: A tensor of patches with shape (Seq, B, C), where Seq = H * W.
+        Returns:
+            An output feature map with shape (B, C, H, W).
+        """
+        Seq, B, C = patches.shape
+        H, W = self.shape
+        # Ensure the sequence length is correct
+        assert Seq == H * W, "Sequence length must match H*W for unpatching."
+        
+        # Permute back to (B, C, Seq)
+        x = patches.permute(1, 2, 0)
+        
+        # Reshape to (B, C, H, W)
+        x = x.view(B, C, H, W)
+        return x
+
     def forward(self, x):
         patches = self._patches(x)
-        projection = self.projecter(patches)
-        embeddings = self.encoder(patches)
+        projection = self.projector(patches)
+        embeddings = self.encoder(device=x.device).unsqueeze(1) # add a batch dimension
         out = projection + embeddings
         out = self.t1(out)
         out = self.t2(out)
@@ -221,7 +246,7 @@ class UFormer(nn.Module):
         out = self.t9(out)
         out = self.t10(out)
         out = self.t12(out)
-        return out
+        return self._unpatches(out)
 
 
 
@@ -240,7 +265,7 @@ class UNet(nn.Module):
         self.down4 = Down(512, 1024 // factor) 
         
         final_shape = list(np.array(input_shape, dtype=np.uint8) // 16)
-        self.transu = UFormer(1024 if bilinear else 1024 // factor, final_shape) 
+        self.transu = UFormer(1024 // factor, final_shape) 
         self.up1 = Up(1024, 512 // factor, bilinear, (8, 8))
         self.up2 = Up(512, 256 // factor, bilinear, (16, 16))
         self.up3 = Up(256, 128 // factor, bilinear, (32, 32))
