@@ -62,8 +62,8 @@ def main(config: Config, debug: bool = False, manual: bool = False):
         "callbacks": [swa],
         "gradient_clip_val": 1.0,
         "accumulate_grad_batches": 3,
-        "limit_train_batches": 0.05,
-        "limit_val_batches": 0.05,
+        # "limit_train_batches": 0.05,
+        # "limit_val_batches": 0.05,
         "devices": 1,
     }
 

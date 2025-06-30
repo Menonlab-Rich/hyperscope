@@ -145,9 +145,10 @@ class Down(nn.Module):
 class Up(nn.Module):
     """Upscaling then double conv"""
 
-    def __init__(self, in_channels, out_channels, bilinear=True, shape=(64, 64)):
+    def __init__(self, in_channels, out_channels, bilinear=True, shape=(64, 64), attn=True):
         super().__init__()
 
+        self.use_attn = attn
         self.attention = TransformerBlock(in_channels=out_channels, num_heads=8, shape=shape)
         # if bilinear, use the normal convolutions to reduce the number of channels
         if bilinear:
@@ -167,8 +168,11 @@ class Up(nn.Module):
         # if you have padding issues, see
         # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
         # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
-        x2_attn = self.attention(x2)
-        x = torch.cat([x2_attn, x1], dim=1)
+        if self.use_attn:
+            x2_attn = self.attention(x2)
+            x = torch.cat([x2_attn, x1], dim=1)
+        else:
+            x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
 
@@ -194,12 +198,11 @@ class UNet(nn.Module):
         self.down3 = Down(256, 512)
         factor = 2 if bilinear else 1
         self.down4 = Down(512, 1024 // factor) 
-        self.up1 = Up(1024, 512 // factor, bilinear, (8, 8))
-        self.up2 = Up(512, 256 // factor, bilinear, (16, 16))
+        self.up1 = Up(1024, 512 // factor, bilinear, (8, 8), attn=False)
+        self.up2 = Up(512, 256 // factor, bilinear, (16, 16), attn=False)
         self.up3 = Up(256, 128 // factor, bilinear, (32, 32))
         self.up4 = Up(128, 64, bilinear, (64, 64))
         self.outc = OutConv(64, n_classes)
-        self.attention = TransformerBlock(in_channels=1024 // factor, shape=(4, 4))
 
     def forward(self, x):
         x1 = self.inc(x)
