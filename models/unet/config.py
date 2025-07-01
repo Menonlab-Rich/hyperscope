@@ -1,5 +1,5 @@
 from os import path as os_path
-from typing import List, Type, Union
+from typing import Any, List, Type, Union
 
 import albumentations as A
 import numpy as np
@@ -9,13 +9,13 @@ from albumentations.pytorch import ToTensorV2
 from base.config import BaseConfigHandler
 from base.dataset import Transformer
 from sklearn.decomposition import PCA
-from typing import Any
 
 CONFIG_FILE_PATH = "config.yml"
 
 # path custom tag handler
 
-class SuperPixelTransform():
+
+class SuperPixelTransform:
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         pass
 
@@ -70,14 +70,13 @@ def get_train_transform():
             A.Compose(
                 [
                     A.ToFloat(always_apply=True),
-                    # A.Resize(128, 128),
-                    # A.LongestMaxSize(512),
+                    A.Resize(256, 256),
                     ToTensorV2(),
                 ]
             )
         ),
         "target": ComposeTransforms(
-            # A.Resize(128, 128),
+            A.Resize(256, 256),
             ToTensorLong,
         ),
     }
@@ -89,11 +88,13 @@ def get_val_transform():
             A.Compose(
                 [
                     A.ToFloat(always_apply=True),
+                    A.Resize(256, 256),
                     ToTensorV2(),
                 ]
             )
         ),
         "target": ComposeTransforms(
+            A.Resize(256, 256),
             ToTensorLong,
         ),
     }
