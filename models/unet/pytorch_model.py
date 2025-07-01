@@ -5,6 +5,7 @@ Author: Milesile
 Repo: https://github.com/milesial/Pytorch-UNet/tree/master
 """
 
+import timm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -141,40 +142,19 @@ class Down(nn.Module):
     def forward(self, x):
         return self.maxpool_conv(x)
 
-
 class Up(nn.Module):
     """Upscaling then double conv"""
 
-    def __init__(self, in_channels, out_channels, bilinear=True, shape=(64, 64), attn=True):
+    def __init__(self, in_channels, out_channels, bilinear=True):
         super().__init__()
 
-        self.use_attn = attn
-        self.attention = TransformerBlock(in_channels=out_channels, num_heads=8, shape=shape)
         # if bilinear, use the normal convolutions to reduce the number of channels
         if bilinear:
-            self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+            self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
             self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
         else:
             self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
             self.conv = DoubleConv(in_channels, out_channels)
-
-    def forward(self, x1, x2):
-        x1 = self.up(x1)
-        # input is CHW
-        diffY = x2.size()[2] - x1.size()[2]
-        diffX = x2.size()[3] - x1.size()[3]
-
-        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
-        # if you have padding issues, see
-        # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
-        # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
-        if self.use_attn:
-            x2_attn = self.attention(x2)
-            x = torch.cat([x2_attn, x1], dim=1)
-        else:
-            x = torch.cat([x2, x1], dim=1)
-        return self.conv(x)
-
 
 class OutConv(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -191,40 +171,34 @@ class UNet(nn.Module):
         self.n_channels = n_channels
         self.n_classes = n_classes
         self.bilinear = bilinear
-
-        self.inc = DoubleConv(n_channels, 64)
-        self.down1 = Down(64, 128)
-        self.down2 = Down(128, 256)
-        self.down3 = Down(256, 512)
         factor = 2 if bilinear else 1
-        self.down4 = Down(512, 1024 // factor) 
-        self.up1 = Up(1024, 512 // factor, bilinear, (8, 8), attn=False)
-        self.up2 = Up(512, 256 // factor, bilinear, (16, 16), attn=False)
-        self.up3 = Up(256, 128 // factor, bilinear, (32, 32))
-        self.up4 = Up(128, 64, bilinear, (64, 64))
-        self.outc = OutConv(64, n_classes)
+        self.encoder = timm.create_model(
+            "timm/vit_base_patch16_siglip_256.v2_webli",
+            pretrained=True,
+            features_only=True,
+            in_chans=1,
+        )
+
+
+        self.bottleneck = DoubleConv(768, 768)
+        self.fusion_1 = DoubleConv(768 + 768, 512)
+        self.fusion_2 = DoubleConv(512 + 768, 256)
+        self.up1 = Up(256, 128 // factor, bilinear)
+        self.up2 = Up(128, 64 // factor, bilinear)
+        self.up3 = Up(64, 32 // factor, bilinear)
+        self.up4 = Up(32, 16 // factor, bilinear)
+        self.outc = OutConv(16, n_classes)
 
     def forward(self, x):
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)
-        x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        x = self.up4(x, x1)
+        features = self.encoder(x)[::-1] # reverse output
+        bottleneck = self.bottleneck(features[0])
+        x = self.fusion_1(torch.cat([bottleneck, features[1]], dim=1 ))
+        x = self.fusion_2(torch.cat([x, features[2]], dim=1))
+        x = self.up2(x)
+        x = self.up3(x)
+        x = self.up4(x)
         logits = self.outc(x)
         return logits
 
     def use_checkpointing(self):
-        self.inc = torch.utils.checkpoint(self.inc)
-        self.down1 = torch.utils.checkpoint(self.down1)
-        self.down2 = torch.utils.checkpoint(self.down2)
-        self.down3 = torch.utils.checkpoint(self.down3)
-        self.down4 = torch.utils.checkpoint(self.down4)
-        self.up1 = torch.utils.checkpoint(self.up1)
-        self.up2 = torch.utils.checkpoint(self.up2)
-        self.up3 = torch.utils.checkpoint(self.up3)
-        self.up4 = torch.utils.checkpoint(self.up4)
-        self.outc = torch.utils.checkpoint(self.outc)
+        return
