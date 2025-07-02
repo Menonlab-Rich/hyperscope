@@ -142,19 +142,22 @@ class Down(nn.Module):
     def forward(self, x):
         return self.maxpool_conv(x)
 
-class Up(nn.Module):
-    """Upscaling then double conv"""
 
+class Up(nn.Module):
     def __init__(self, in_channels, out_channels, bilinear=True):
         super().__init__()
-
-        # if bilinear, use the normal convolutions to reduce the number of channels
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
             self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
         else:
+            # Corrected the DoubleConv input channels for the non-bilinear case
             self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-            self.conv = DoubleConv(in_channels, out_channels)
+            self.conv = DoubleConv(in_channels // 2, out_channels)
+
+    def forward(self, x):
+        x = self.up(x)
+        return self.conv(x)
+
 
 class OutConv(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -194,6 +197,7 @@ class UNet(nn.Module):
         bottleneck = self.bottleneck(features[0])
         x = self.fusion_1(torch.cat([bottleneck, features[1]], dim=1 ))
         x = self.fusion_2(torch.cat([x, features[2]], dim=1))
+        x = self.up1(x)
         x = self.up2(x)
         x = self.up3(x)
         x = self.up4(x)

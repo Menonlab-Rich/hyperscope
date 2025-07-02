@@ -21,8 +21,12 @@ matplotlib.use('Agg') # Prevent problems with tkinter
 class UNetLightning(pl.LightningModule):
     def __init__(self, n_channels=1, n_classes=3, bilinear=False,
                  learning_rate=1e-5, weight_decay=1e-9, momentum=0.8,
-                 amp=False, batch_size=None): 
+                 amp=False, batch_size=None, weights=None): 
         super(UNetLightning, self).__init__()
+        if weights is None:
+            weights = torch.ones(n_classes)
+        else:
+            weights = torch.tensor(weights)
         self.batch_size=batch_size
         self.model = UNet(n_channels, n_classes, bilinear)
         self.learning_rate = learning_rate
@@ -32,10 +36,11 @@ class UNetLightning(pl.LightningModule):
         self.n_classes = n_classes
         self.criterion = nn.CrossEntropyLoss() if n_classes > 1 else nn.BCEWithLogitsLoss()
         self.criterion.eval()
-        self.dice_loss = DiceLoss()  # 0 is the background class
+        self.dice_loss = DiceLoss(weight=torch.tensor(weights) if weights is not None else None)  # 0 is the background class
         self.dice_loss.eval()
         self.val_accuracy = GeneralizedDiceScore(
-            self.n_classes)
+            self.n_classes, hardmax=True)
+        self.val_dice = GeneralizedDiceScore(self.n_classes, hardmax=False)
         self.train_loss_metric = MeanMetric()
         self.val_loss_metric = MeanMetric()
         self.val_outputs = []
@@ -46,21 +51,18 @@ class UNetLightning(pl.LightningModule):
         return self.model(x)
 
     def configure_optimizers(self):
-        optimizer = optim.RMSprop(self.parameters(),
-                                  lr=self.learning_rate,
-                                  weight_decay=self.weight_decay,
-                                  momentum=self.momentum,
-                                  foreach=True)
+        optimizer = optim.Adam(self.parameters(),
+                                  lr=self.learning_rate)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, 'max', patience=2)
-        return {'optimizer': optimizer, 'lr_scheduler': {"scheduler": scheduler, 'monitor': 'val_dice'}}
+        return {'optimizer': optimizer, 'lr_scheduler': {"scheduler": scheduler, 'monitor': 'val_dice_soft'}}
 
     def calc_loss(self, masks_pred, masks_true):
         if self.n_classes == 1:
             masks_pred = masks_pred.squeeze(1)
         criterion_loss = self.criterion(masks_pred, masks_true)
         dloss = self.dice_loss(masks_pred, masks_true) 
-        return criterion_loss + dloss
+        return criterion_loss  + dloss
 
     def training_step(self, batch, batch_idx):
         images, true_masks, _ = batch
@@ -88,13 +90,18 @@ class UNetLightning(pl.LightningModule):
             warn("true masks have inf values")
         # Update and log the custom accuracy
         self.val_accuracy.update(masks_pred, true_masks)
+        self.val_dice.update(masks_pred, true_masks)
         self.val_loss_metric.update(loss)
+
         self.log(
             'val_loss', self.val_loss_metric.compute(),
             on_epoch=True, prog_bar=True, batch_size=self.batch_size, sync_dist=True)
         self.log(
-            'val_dice', self.val_accuracy.compute(),
+            'val_dice_soft', self.val_dice.compute(),
             on_epoch=True, prog_bar=True, batch_size=self.batch_size, sync_dist=True)
+
+        self.log(
+            'val_dice_hard', self.val_accuracy.compute(), on_epoch=True, prog_bar=True, batch_size=self.batch_size, sync_dist=True)
         return {
             'loss': loss,
             'accuracy': self.val_accuracy,
@@ -128,6 +135,7 @@ class UNetLightning(pl.LightningModule):
 
         # Reset the metrics after each validation epoch
         self.val_accuracy.reset()
+        self.val_dice.reset()
         self.val_loss_metric.reset()
 
         if len(self.val_outputs) == 0:
@@ -205,42 +213,38 @@ class UNetLightning(pl.LightningModule):
         self.model.use_checkpointing()
 
     def predict_step(self, batch, batch_idx):
-        images, true_masks, _ = batch
+        """
+        Performs pixel-wise prediction and returns both the predicted class
+        and the model's confidence for each pixel.
+        """
+        images, _, _ = batch  # We only need the images for prediction
         masks_pred = self(images)
-        masks_pred = F.softmax(masks_pred, dim=1)
-        masks_pred = torch.argmax(masks_pred, dim=1)
-        return self._classify_tensors(masks_pred).cpu().numpy()
-        
+
+        # Apply softmax to get probabilities for each class at each pixel
+        probabilities = F.softmax(masks_pred, dim=1)
+
+        # Get the confidence (max probability) and the prediction (class index)
+        # for each pixel.
+        confidence, prediction = torch.max(probabilities, dim=1)
+
+        # Return the pixel-wise prediction and confidence maps as numpy arrays
+        return prediction.cpu().numpy(), confidence.cpu().numpy()
+
     def _update_confusion_matrix(self, pred, target):
-        # Squeeze the tensors to remove the channel dimension
-        pred = F.softmax(pred, dim=1)
-        pred = torch.argmax(pred, dim=1)
-        pred_classified = self._classify_tensors(pred)
-        target_classified = self._classify_tensors(target)
-        
-        # Update the confusion matrix
-        self.mccm.update(pred_classified.to(self.device), target_classified.to(self.device))
-    def _classify_tensors(self, tensor, patch_size=8, nclasses=3):
-        tensor = tensor.squeeze(1)
-        B, H, W = tensor.shape
+        """
+        Updates the confusion matrix based on pixel-wise predictions.
+        """
+        # Convert model logits to hard, class predictions for each pixel
+        pred_softmax = F.softmax(pred, dim=1)
+        pred_argmax = torch.argmax(pred_softmax, dim=1)
 
-        # Create patches
-        patches = tensor.unfold(1, patch_size, patch_size).unfold(2, patch_size, patch_size)
-        patches = patches.contiguous().view(B, -1, patch_size, patch_size)
-    
-        # Create a tensor to store individual patch classifications
-        classified_patches = torch.zeros(B * patches.shape[1], dtype=torch.int64)
-    
-        patch_idx = 0
-        for b in range(patches.shape[0]):
-            for i in range(patches.shape[1]):
-                patch = patches[b, i, :, :]
-                uniq, counts = torch.unique(patch, return_counts=True)
-                class_ = int(uniq[torch.argmax(counts)].item())
-                classified_patches[patch_idx] = class_
-                patch_idx += 1
+        # Ensure the target tensor is in the correct format [N, H, W]
+        if target.dim() == 4 and target.shape[1] == 1:
+            target = target.squeeze(1)
 
-        return classified_patches        
+        # Flatten the tensors to get a list of pixel predictions
+        # and update the confusion matrix
+        self.mccm.update(pred_argmax.flatten(), target.flatten())
 
     def _mask_to_rgb(self, mask):
         """

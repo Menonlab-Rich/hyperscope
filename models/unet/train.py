@@ -37,7 +37,7 @@ def main(config: Config, debug: bool = False, manual: bool = False):
     run_id = logger.experiment["sys/id"].fetch()
 
     checkpoint_cb = ModelCheckpoint(
-        monitor="val_dice",
+        monitor="val_dice_hard",
         dirpath=config.out_dir,
         filename=f"unet-{run_id}-{{epoch:02d}}-{{val_dice:.2f}}",
         save_top_k=3,
@@ -52,6 +52,7 @@ def main(config: Config, debug: bool = False, manual: bool = False):
         n_classes=len(config.classes),
         learning_rate=config.learning_rate,
         batch_size=config.batch_size,
+        weights=config.weights,
     )
 
     trainer_args = {
@@ -124,6 +125,7 @@ def main(config: Config, debug: bool = False, manual: bool = False):
                     n_classes=len(config.classes),
                     learning_rate=config.learning_rate,
                     batch_size=config.batch_size,
+                    weights=config.weights,
                 )
 
                 trainer = Trainer(**trainer_args)

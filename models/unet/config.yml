@@ -1,14 +1,15 @@
 # define the root directory that all other paths are relative to
-root_dir: &root_dir ~/data/worms4/
+root_dir: &root_dir ~/data/worms7/
 data_dir: !path [*root_dir, "images"]
 mask_dir: !path [*root_dir, "masks"]
 out_dir: &out_dir !path ["~/data", "output"]
-ckpt_path: /scratch/general/nfs1/u0977428/output/unet-UN-507-epoch=11-val_dice=0.55.ckpt
+# ckpt_path: /scratch/general/nfs1/u0977428/output/unet-UN-507-epoch=11-val_dice=0.55.ckpt
+ckpt_path: /scratch/general/nfs1/u0977428/output/unet-UN-583-epoch=16-val_dice=0.56.ckpt
 split_ratio: 0.8
 input_channels: 1 
-learning_rate: 1.e-3
-batch_size: 4 
-epochs: 15 
+learning_rate: 1.e-4
+batch_size: 6 
+epochs: 30 
 device: cuda # Example: 'cpu' or 'cuda'
 
 classes:
@@ -17,10 +18,10 @@ classes:
   - "mcherry"
 weights:
   - 0.3
-  - 1
-  - 1
+  - 1.
+  - 1.
 gpus: 1 # How many gpus to use
-precision: '16-mixed' # 16, 32, 64, 'full', 'double', '16-mixed', '16-bf16'
+precision: '32' # 16, 32, 64, 'full', 'double', '16-mixed', '16-bf16'
 accelerator: 'auto' # 'cpu', 'gpu', 'tpu', 'amp', 'auto'
 encoder_path: !path [*root_dir, '..', 'encoder', 'best_model.ckpt']
 debug:
