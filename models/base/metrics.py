@@ -27,8 +27,9 @@ import torch.nn.functional as F
 import torch
 
 class GeneralizedDiceScore(TorchGeneralizedDiceScore):
-    def __init__(self, num_classes, **kwargs):
+    def __init__(self, num_classes, hardmax=False, **kwargs):
         super().__init__(num_classes=num_classes, **kwargs)
+        self.hardmax = hardmax
     
     def update(self, preds: torch.Tensor, target: torch.Tensor) -> None:
         assert preds.shape[0] == target.shape[0], "predict & target batch size don't match"
@@ -44,11 +45,9 @@ class GeneralizedDiceScore(TorchGeneralizedDiceScore):
         # Apply softmax to predictions to get probabilities
         preds = F.softmax(preds, dim=1)
         
-        # Convert probabilities to class indices
-        preds = torch.argmax(preds, dim=1)  # [N, C, H, W] -> [N, H, W]
-        
-        # One-hot encode the predictions
-        preds = F.one_hot(preds, self.num_classes).permute(0, 3, 1, 2)  # [N, H, W] -> [N, C, H, W]
+        if self.hardmax:
+            preds = torch.argmax(preds, dim=1)
+            preds = F.one_hot(preds, self.num_classes).permute(0, 3, 1, 2)
         
         # Call the parent class update method
         super().update(preds, target)

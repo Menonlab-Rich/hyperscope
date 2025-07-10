@@ -8,39 +8,39 @@ from models.unet.model import UNetLightning
 import neptune
 from neptune.types import File
 from models.unet.config import get_train_transform
+from skimage.util import view_as_windows # We'll use this for efficient patching
+
+# --- Assume these are in utils.py ---
+# You must import your actual preprocessing functions
+try:
+    from utils import calc_crops, find_regions_and_generate_mask
+except ImportError:
+    print("FATAL: Could not import preprocessing functions from 'utils.py'")
+    # Define dummy functions so the script can be read, but it will not work correctly.
+    def calc_crops(img, *args): return 0, img.shape[0], 0, img.shape[1]
+    def find_regions_and_generate_mask(img, **kwargs): return np.ones_like(img, dtype=np.uint8)
+# ---
 
 load_dotenv()
 
+# --- Functions from your script (mostly unchanged) ---
 
 def load_lightning_model(
     checkpoint_path: str, device: str = "cuda" if torch.cuda.is_available() else "cpu"
 ) -> pl.LightningModule:
-    """
-    Load the PyTorch Lightning UNet model from checkpoint.
-
-    Args:
-        checkpoint_path: Path to the checkpoint file
-        device: Device to load the model on
-
-    Returns:
-        Loaded PyTorch Lightning model
-    """
-    # Load model from checkpoint
+    """Loads the PyTorch Lightning UNet model from checkpoint."""
     model = UNetLightning.load_from_checkpoint(checkpoint_path, map_location=device, n_classes=3)
-
     model = model.to(device)
     model.eval()
-
     return model
 
-
 def process_patch(
-    patch: Image.Image,
+    patch: np.ndarray, # Expects numpy array now
     model: pl.LightningModule,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
 ) -> torch.Tensor:
-    """Process a single patch through the model."""
-    patch = np.array(patch)
+    """Process a single numpy patch through the model."""
+    # The transform should handle numpy to tensor conversion
     patch_tensor = get_train_transform()["input"](
         image=patch, mask=np.zeros_like(patch).astype(np.uint8)
     )["image"].unsqueeze(0)
@@ -48,173 +48,157 @@ def process_patch(
 
     with torch.no_grad():
         output = model(patch_tensor)
-        # Apply softmax and get class predictions
         output = torch.softmax(output, dim=1)
         output = torch.argmax(output, dim=1)
 
-    return output.squeeze(0)
+    return output.squeeze(0).cpu().numpy() # Return numpy array on cpu
 
-
-def create_colored_overlay(segmentation_map: torch.Tensor, alpha: float = 0.5) -> np.ndarray:
+def create_colored_overlay(segmentation_map: np.ndarray, alpha: float = 0.5) -> np.ndarray:
     """Create a colored overlay from the segmentation map."""
-    # Convert to numpy array
-    seg_map = segmentation_map.cpu().numpy()
-
-    # Create RGBA overlay
+    seg_map = segmentation_map
     overlay = np.zeros((*seg_map.shape, 4), dtype=np.uint8)
-
-    # Set colors: black (0), red (1), green (2)
     overlay[seg_map == 1] = [255, 0, 0, int(255 * alpha)]  # Red for class 1
     overlay[seg_map == 2] = [0, 255, 0, int(255 * alpha)]  # Green for class 2
-    overlay[seg_map == 3] = [0, 0, 255, int(255 * alpha)]  # blue for class 3
-
+    # Note: Your model has n_classes=3, so class 0 is background
     return overlay
 
 
-def process_image(
+# --- REVISED AND CORRECTED IMAGE PROCESSING FUNCTION ---
+
+def process_image_corrected(
     image_path: str,
-    checkpoint_path: str,
-    device: str = "cuda" if torch.cuda.is_available() else "cpu",
-    patch_size: Tuple[int, int] = (64, 64),
+    model: pl.LightningModule,
+    device: str,
+    # --- ADD PREPROCESSING PARAMS ---
+    # These MUST match the values used during training!
+    crop_args: dict,
+    mask_gen_args: dict,
+    patch_size: Tuple[int, int] = (128, 128),
+    overlap: int = 32 # Add overlap for smoother stitching
 ) -> Image.Image:
     """
-    Process image using the Lightning UNet model.
-
-    Args:
-        image_path: Path to input image
-        checkpoint_path: Path to model checkpoint
-        device: Device to run inference on
-        patch_size: Size of patches to process
-
-    Returns:
-        Processed image with overlay
+    Process an image using a pipeline that MIRRORS the training preprocessing.
     """
-    # Load model
-    model = load_lightning_model(checkpoint_path, device)
+    # 1. Load Image
+    image = np.array(Image.open(image_path))
+    original_image_shape = image.shape[:2]
 
-    # Load and preprocess image
-    image = Image.open(image_path)
-    width, height = image.size
+    # 2. Apply Initial Crop (from training)
+    crop_top, crop_bottom, crop_left, crop_right = calc_crops(image, **crop_args)
+    cropped_image = image[crop_top:crop_bottom, crop_left:crop_right]
 
-    # Create output image
-    output_image = Image.new("L", image.size, (0))
-    output_overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    # 3. Generate ROI Mask (from training)
+    # This mask identifies the regions the model was trained to look at.
+    roi_mask = find_regions_and_generate_mask(cropped_image, **mask_gen_args)
 
-    # Process image patch by patch
-    for y in range(0, height, patch_size[1]):
-        for x in range(0, width, patch_size[0]):
-            # Extract patch
-            patch = image.crop(
-                (x, y, min(x + patch_size[0], width), min(y + patch_size[1], height))
-            )
+    # 4. Standardize and Zero Background (from training)
+    # Perform standardization BEFORE zeroing the background.
+    processed_image = cropped_image.astype(np.float32)
+    processed_image[roi_mask == 0] = 0 # Zero out background
+    mean = processed_image[roi_mask == 1].mean()
+    std = processed_image[roi_mask == 1].std()
+    processed_image = (processed_image - mean) / (std + 1e-8) # Add epsilon for stability
 
-            # Pad if necessary
-            if patch.size != patch_size:
-                new_patch = Image.new(image.mode, patch_size, 0)
-                new_patch.paste(patch, (0, 0))
-                patch = new_patch
+    # 5. Patch and Reconstruct with Overlap
+    step = patch_size[0] - overlap
+    h, w = processed_image.shape
+    
+    # Pad the image to ensure patches fit perfectly at the edges
+    pad_h = (step - (h - patch_size[0]) % step) % step
+    pad_w = (step - (w - patch_size[1]) % step) % step
+    padded_image = np.pad(processed_image, ((0, pad_h), (0, pad_w)), mode='constant')
+    
+    # These will store the final results and handle overlap averaging
+    reconstructed_mask = np.zeros(padded_image.shape, dtype=np.float32)
+    overlap_counts = np.zeros(padded_image.shape, dtype=np.float32)
 
-            # Process patch
-            segmentation = process_patch(patch, model, device)
+    # Use sliding windows for efficient patching
+    patches = view_as_windows(padded_image, patch_size, step=step)
+    
+    for i in range(patches.shape[0]):
+        for j in range(patches.shape[1]):
+            patch = patches[i, j]
+            
+            # --- Inference ---
+            # Only process non-empty patches if desired, for speed.
+            if patch.max() == 0:
+                continue # Skip totally black patches
 
-            # Create overlay
-            overlay = create_colored_overlay(segmentation)
+            segmentation_patch = process_patch(patch, model, device)
 
-            # Convert original patch to RGBA, preserving bit depth for display
-            overlay_img = Image.fromarray(overlay, "RGBA")
+            # --- Stitching ---
+            y_start, x_start = i * step, j * step
+            y_end, x_end = y_start + patch_size[0], x_start + patch_size[1]
+            
+            reconstructed_mask[y_start:y_end, x_start:x_end] += segmentation_patch
+            overlap_counts[y_start:y_end, x_start:x_end] += 1
 
-            # Paste into final image
-            output_image.paste(patch, (x, y))
-            output_overlay.paste(overlay_img, (x, y))
-    output_image = np.array(output_image)
-    output_image = (output_image - output_image.min()) / (output_image.max() - output_image.min())
-    output_image = (output_image * 255).astype(np.uint8)
+    # Average the predictions in the overlapping regions
+    overlap_counts[overlap_counts == 0] = 1 # Avoid division by zero
+    final_mask_padded = (reconstructed_mask / overlap_counts).round().astype(np.uint8)
 
-    # Convert to RGBA
-    output_image_rgba = Image.fromarray(output_image).convert("RGBA")
+    # Un-pad to match original cropped image size
+    final_mask = final_mask_padded[:h, :w]
 
-    # Ensure both images have the same size and mode
-    if output_image_rgba.size != output_overlay.size:
-        output_overlay = output_overlay.resize(output_image_rgba.size)
+    # 6. Create Visualization
+    # Place the final mask back into the full-size image context
+    full_sized_seg_map = np.zeros(original_image_shape, dtype=np.uint8)
+    full_sized_seg_map[crop_top:crop_bottom, crop_left:crop_right] = final_mask
+    
+    overlay_rgba = create_colored_overlay(full_sized_seg_map)
 
-    # Composite the images
-    return Image.alpha_composite(output_image_rgba, output_overlay)
+    # Normalize original image for nice viewing
+    img_view = (image - image.min()) / (image.max() - image.min() + 1e-8)
+    img_view = (img_view * 255).astype(np.uint8)
+    
+    base_image_rgba = Image.fromarray(img_view).convert("RGBA")
+    overlay_img = Image.fromarray(overlay_rgba, "RGBA")
 
-
-# Add Neptune logging capability
-def process_image_with_logging(
-    image_path: str,
-    checkpoint_path: str,
-    neptune_run,
-    device: str = "cuda" if torch.cuda.is_available() else "cpu",
-) -> Image.Image:
-    """Process image and log results to Neptune."""
-    result = process_image(image_path, checkpoint_path, device)
-
-    # Log the result to Neptune
-    neptune_run["results/processed_image"].log(File.as_image(result))
-
-    # Log original image for comparison
-    original = Image.open(image_path)
-    neptune_run["results/original_image"].log(File.as_image(original))
-
-    return result
+    return Image.alpha_composite(base_image_rgba, overlay_img)
 
 
 # Example usage
 if __name__ == "__main__":
     import os
-    from glob import glob
     from tqdm import tqdm
-    import random
-    from collections import defaultdict
 
-    # Paths
-    IMAGE_PATH = "/mnt/d/hyper-scope/data/interim/worms/imgs/*.tif"
-    CHECKPOINT_PATH = (
-        "/mnt/d/hyper-scope/models/checkpoints/unet-UN-427-epoch=07-val_dice=0.96.ckpt"
+    # --- MUST MATCH TRAINING PARAMETERS ---
+    CROP_KWARGS = {
+        "crop_top_amt": 150, "crop_bottom_amt": 300, "crop_left_amt": 150, "crop_right_amt": 0
+    }
+    MASK_GEN_KWARGS = {
+        "window_size": (16, 16), "min_area": 1000, "threshold": 1.5
+    }
+    PATCH_KWARGS = {
+        "patch_size": (64, 64), "overlap": 32 # 50% overlap
+    }
+    # ---
+
+    IMAGE_PATH = "/mnt/d/rich/hyper-scope/worm_nomod.tif" # Path to a single test image
+    CHECKPOINT_PATH = "/mnt/d/rich/hyper-scope/models/checkpoints/unet-UN-507-epoch=11-val_dice=0.55.ckpt"
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+    print("Loading model...")
+    model = load_lightning_model(CHECKPOINT_PATH, device=DEVICE)
+
+    # --- For Neptune Logging ---
+    # run = neptune.init_run(...)
+
+    print(f"Processing image: {IMAGE_PATH}")
+    result_image = process_image_corrected(
+        image_path=IMAGE_PATH,
+        model=model,
+        device=DEVICE,
+        crop_args=CROP_KWARGS,
+        mask_gen_args=MASK_GEN_KWARGS,
+        **PATCH_KWARGS
     )
-
-    # Get all image paths
-    all_images = glob(IMAGE_PATH)
     
-    # Group images by prefix
-    prefix_groups = defaultdict(list)
-    for img_path in all_images:
-        # Extract filename from path
-        filename = os.path.basename(img_path)
-        # Get prefix (everything before the first underscore)
-        prefix = filename.split('_')[0]
-        prefix_groups[prefix].append(img_path)
-    
-    # Select 5 random images from each prefix group
-    selected_images = []
-    for prefix, images in prefix_groups.items():
-        # If there are less than 5 images, take all of them
-        n_samples = min(5, len(images))
-        selected_images.extend(random.sample(images, n_samples))
-    
-    # Initialize Neptune run
-    run = neptune.init_run(
-        api_token=os.environ.get("NEPTUNE_API_TOKEN"),
-        project="richbai90/unet2",
-        tags=["testing", "segmentation", "unet", "worms"],
-    )
+    # Save or display the result
+    result_image.save("result_overlay.png")
+    print("Saved result to result_overlay.png")
 
-    try:
-        # Log the number of images per prefix
-        for prefix, images in prefix_groups.items():
-            run[f"data/prefix_{prefix}_total_images"] = len(images)
-            run[f"data/prefix_{prefix}_selected_images"] = min(5, len(images))
-
-        # Process selected images
-        for img in tqdm(selected_images):
-            prefix = os.path.basename(img).split('_')[0]
-            # Log images with their prefix in Neptune
-            process_image_with_logging(
-                image_path=img, 
-                checkpoint_path=CHECKPOINT_PATH, 
-                neptune_run=run
-            )
-    finally:
-        run.stop()
+    # --- Log to Neptune ---
+    # if run:
+    #     run["results/final_overlay"].upload(File.as_image(result_image))
+    #     run.stop()

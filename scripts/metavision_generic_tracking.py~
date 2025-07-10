@@ -1,0 +1,402 @@
+# Copyright (c) Prophesee S.A. - All Rights Reserved
+#
+# Subject to Prophesee Metavision Licensing Terms and Conditions ("License T&C's").
+# You may not use this file except in compliance with these License T&C's.
+# A copy of these License T&C's is located in the "licensing" folder accompanying this file.
+
+"""
+Simple script to track general objects.
+You can use it, for example, with the reference file traffic_monitoring.raw.
+
+Includes options for headless execution and saving tracking results to a NumPy file.
+"""
+
+import cv2
+import numpy as np
+import sys  # Import sys for exit
+import time  # To track processing time if needed
+
+from metavision_core.event_io import EventsIterator
+from metavision_core.event_io import LiveReplayEventsIterator, is_live_camera
+from metavision_sdk_analytics import (
+    TrackingAlgorithm,
+    TrackingConfig,
+    draw_tracking_results,
+)
+from metavision_sdk_core import OnDemandFrameGenerationAlgorithm
+from metavision_sdk_cv import ActivityNoiseFilterAlgorithm, TrailFilterAlgorithm
+from metavision_sdk_ui import EventLoop, BaseWindow, MTWindow, UIAction, UIKeyEvent
+
+
+def parse_args():
+    import argparse
+
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Generic Tracking sample.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    # Base options
+    base_options = parser.add_argument_group("Base options")
+    base_options.add_argument(
+        "-i",
+        "--input-raw-file",
+        dest="input_path",
+        default="",
+        help="Path to input RAW file. If not specified, the live stream of the first available camera is used. "
+        "If it's a camera serial number, it will try to open that camera instead.",
+    )
+    base_options.add_argument(
+        "--process-from",
+        dest="process_from",
+        type=int,
+        default=0,
+        help="Start time to process events (in us).",
+    )
+    base_options.add_argument(
+        "--process-to",
+        dest="process_to",
+        type=int,
+        default=None,
+        help="End time to process events (in us).",
+    )
+
+    parser.add_argument(
+        "--update-frequency",
+        dest="update_frequency",
+        type=float,
+        default=200.0,
+        help="Tracker's update frequency, in Hz.",
+    )
+
+    # Min/Max size options
+    minmax_size_options = parser.add_argument_group("Min/Max size options")
+    minmax_size_options.add_argument(
+        "--min-size",
+        dest="min_size",
+        type=int,
+        default=10,
+        help="Minimal size of an object to track (in pixels).",
+    )
+    minmax_size_options.add_argument(
+        "--max-size",
+        dest="max_size",
+        type=int,
+        default=300,
+        help="Maximal size of an object to track (in pixels).",
+    )
+
+    # Filtering options
+    filter_options = parser.add_argument_group("Filtering options")
+    filter_options.add_argument(
+        "--activity-time-ths",
+        dest="activity_time_ths",
+        type=int,
+        default=10000,
+        help="Length of the time window for activity filtering (Disabled if the threshold is equal to 0).",
+    )
+    filter_options.add_argument(
+        "--activity-ths",
+        dest="activity_ths",
+        type=int,
+        default=1,
+        help="Minimum number of events in the neighborhood.",
+    )
+    filter_options.add_argument(
+        "--activity-trail-ths",
+        dest="activity_trail_ths",
+        type=int,
+        default=1000,
+        help="Length of the time window for trail filtering (in us).",
+    )
+
+    # Outcome Options
+    outcome_options = parser.add_argument_group("Outcome options")
+    outcome_options.add_argument(
+        "-o",
+        "--out-video",
+        dest="out_video",
+        type=str,
+        default="",
+        help="Path to an output AVI file to save the resulting video (ignored in headless mode). A frame is generated every time the tracking callback is called.",
+    )
+    outcome_options.add_argument(
+        "--output-numpy",
+        dest="output_numpy",
+        type=str,
+        default="",
+        help="Path to an output .npy file to save the tracking results. If specified, all tracking results will be concatenated and saved.",
+    )
+    outcome_options.add_argument(
+        "--headless",
+        dest="headless",
+        action="store_true",
+        help="Run the script without displaying a GUI window.",
+    )
+
+    # Replay Option
+    replay_options = parser.add_argument_group("Replay options")
+    replay_options.add_argument(
+        "-f",
+        "--replay_factor",
+        type=float,
+        default=1,
+        help="Replay Factor. If greater than 1.0 we replay with slow-motion, otherwise this is a speed-up over real-time.",
+    )
+
+    args = parser.parse_args()
+
+    if args.process_to and args.process_from >= args.process_to:  # Corrected condition
+        print(
+            f"Error: --process-from ({args.process_from}) must be strictly less than --process-to ({args.process_to})."
+        )
+        sys.exit(1)  # Use sys.exit
+
+    if args.headless and args.out_video:
+        print("Warning: --out-video is ignored when running in --headless mode.")
+        args.out_video = ""  # Ensure video writing is disabled
+
+    return args
+
+
+def main():
+    """Main"""
+    args = parse_args()
+
+    # Events iterator on Camera or RAW file
+    mv_iterator = EventsIterator(
+        input_path=args.input_path,
+        start_ts=args.process_from,
+        max_duration=(args.process_to - args.process_from)
+        if args.process_to is not None
+        else None,
+        delta_t=1000,
+    )  # Kept delta_t=1e3 as in original
+
+    # Check if iterator setup failed (e.g., file not found, camera unavailable)
+    try:
+        height, width = mv_iterator.get_size()  # Camera Geometry
+    except Exception as e:
+        print(f"Error: Could not initialize EventsIterator: {e}")
+        print("Please check input path or camera connection.")
+        sys.exit(1)
+
+    print(f"Sensor geometry: {width}x{height}")
+
+    if args.replay_factor != 1 and not is_live_camera(
+        args.input_path
+    ):  # Use != 1 to allow speedup too
+        mv_iterator = LiveReplayEventsIterator(
+            mv_iterator, replay_factor=args.replay_factor
+        )
+
+    # --- Algorithm Initialization ---
+    # Noise + Trail filter that will be applied to events
+    activity_noise_filter = ActivityNoiseFilterAlgorithm(
+        width, height, args.activity_time_ths
+    )
+    trail_filter = TrailFilterAlgorithm(width, height, args.activity_trail_ths)
+    events_buf = ActivityNoiseFilterAlgorithm.get_empty_output_buffer()
+
+    # Tracking Algorithm
+    tracking_results = TrackingAlgorithm.get_empty_output_buffer()
+    tracking_config = TrackingConfig()  # Default configuration
+    tracking_algo = TrackingAlgorithm(
+        sensor_width=width, sensor_height=height, tracking_config=tracking_config
+    )
+    tracking_algo.min_size = args.min_size
+    tracking_algo.max_size = args.max_size
+
+    # Event Frame Generator (only needed if not headless)
+    events_frame_gen_algo = None
+    output_img = None
+    if not args.headless:
+        acc_time = int(1.0e6 / args.update_frequency)
+        events_frame_gen_algo = OnDemandFrameGenerationAlgorithm(
+            width, height, acc_time
+        )
+        output_img = np.zeros((height, width, 3), np.uint8)
+
+    # --- Setup UI, Video Writer, and NumPy Collector (Conditional) ---
+    window = None
+    video_writer = None
+    all_tracking_results = []  # List to store numpy arrays from each callback
+
+    if not args.headless:
+        window = MTWindow(
+            title="Generic Tracking",
+            width=width,
+            height=height,
+            mode=BaseWindow.RenderMode.BGR,
+        )
+        window.show_async(output_img)  # Show initial empty image
+
+        if args.out_video:
+            fourcc = cv2.VideoWriter_fourcc("M", "J", "P", "G")
+            # Ensure the filename ends with .avi
+            video_name = (
+                args.out_video
+                if args.out_video.lower().endswith(".avi")
+                else args.out_video + ".avi"
+            )
+            try:
+                video_writer = cv2.VideoWriter(
+                    video_name, fourcc, 20, (width, height)
+                )  # Use a reasonable default FPS
+                if not video_writer.isOpened():
+                    raise IOError(f"Could not open video writer for {video_name}")
+                print(f"Recording tracking output to {video_name}")
+            except Exception as e:
+                print(
+                    f"Warning: Could not open video file {video_name}. Video recording disabled. Error: {e}"
+                )
+                video_writer = None  # Disable video writing if initialization failed
+                args.out_video = ""
+
+        # --- Keyboard Callback Definition (only if window exists) ---
+        def keyboard_cb(key, scancode, action, mods):
+            nonlocal args  # Allow modification of args object if needed (though not strictly necessary here)
+            SIZE_STEP = 10
+
+            if action != UIAction.RELEASE:
+                return
+            if key == UIKeyEvent.KEY_ESCAPE or key == UIKeyEvent.KEY_Q:
+                window.set_close_flag()
+            # A: Increase minimum size
+            elif key == UIKeyEvent.KEY_A:
+                if tracking_algo.min_size + SIZE_STEP <= tracking_algo.max_size:
+                    tracking_algo.min_size += SIZE_STEP
+                    print(f"Increased min size to {tracking_algo.min_size}")
+            # B: Decrease minimum size
+            elif key == UIKeyEvent.KEY_B:
+                if tracking_algo.min_size - SIZE_STEP >= 0:
+                    tracking_algo.min_size -= SIZE_STEP
+                    print(f"Decreased min size to {tracking_algo.min_size}")
+            # C: Increase maximum size
+            elif key == UIKeyEvent.KEY_C:
+                tracking_algo.max_size += SIZE_STEP
+                print(f"Increased max size to {tracking_algo.max_size}")
+            # D: Decrease maximum size
+            elif key == UIKeyEvent.KEY_D:
+                if tracking_algo.max_size - SIZE_STEP >= tracking_algo.min_size:
+                    tracking_algo.max_size -= SIZE_STEP
+                    print(f"Decreased max size to {tracking_algo.max_size}")
+
+        window.set_keyboard_callback(keyboard_cb)
+        print("--- Interactive Controls ---")
+        print("Press 'q' or Escape to leave the program.")
+        print("Press 'a' / 'b' to increase / decrease the minimum object size.")
+        print("Press 'c' / 'd' to increase / decrease the maximum object size.")
+        print("---------------------------")
+
+    # --- Tracking Callback Definition ---
+    # This callback will be triggered by the tracking algorithm at its update frequency.
+    def tracking_cb(tracking_results):
+        tracking_results = tracking_results.numpy()
+        # Always collect results if numpy output is requested
+        if (
+            args.output_numpy and tracking_results.size > 0
+        ):  # Check if the array is not empty
+            # tracking_results is already a structured numpy array
+            # Append it to the list for later concatenation
+            all_tracking_results.append(tracking_results.copy())  # Use copy to be safe
+
+        # Perform visualization steps only if not in headless mode
+        if not args.headless and window:
+            nonlocal output_img  # Need to modify the output_img in the outer scope
+            # Generate the frame for visualization
+            events_frame_gen_algo.generate(0, output_img)
+            # Draw the tracking results onto the frame
+            draw_tracking_results(0, tracking_results, output_img)
+            # Show the frame in the window
+            window.show_async(output_img)
+            # Write frame to video if enabled
+            if video_writer:
+                video_writer.write(output_img)
+
+    # --- Main Processing Loop ---
+    print("Starting event processing...")
+    start_time = time.time()
+    total_events = 0
+    last_print_time = start_time
+
+    try:  # Wrap processing in try...finally for cleanup
+        for evs in mv_iterator:
+            total_events += len(evs)
+
+            # Dispatch system events to the window (if it exists)
+            # Also useful for handling signals even in headless mode
+            EventLoop.poll_and_dispatch()
+
+            # --- Event Processing Pipeline ---
+            activity_noise_filter.process_events(evs, events_buf)
+            trail_filter.process_events_(events_buf)  # In-place modification
+
+            # Feed events to frame generator (if not headless)
+            if events_frame_gen_algo:
+                events_frame_gen_algo.process_events(events_buf)
+
+            # Feed events to tracking algorithm
+            # This will internally trigger tracking_cb when appropriate
+            tracking_algo.process_events(events_buf, tracking_results)
+            tracking_cb(tracking_results)
+
+            # Check for exit condition (only if window exists)
+            if window and window.should_close():
+                print("Exit requested by user.")
+                break
+
+        print("Processing finished.")
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        total_mev = total_events / 1e6
+        avg_rate = total_mev / elapsed_time if elapsed_time > 0 else 0
+        print(f"Total processing time: {elapsed_time:.2f} seconds")
+        print(f"Total events processed: {total_events} ({total_mev:.2f} Mev)")
+        print(f"Average processing rate: {avg_rate:.2f} Mev/s")
+
+    finally:  # Ensure cleanup happens even if errors occur
+        # --- Cleanup ---
+        if window:
+            window.destroy()
+
+        if video_writer:
+            print("Releasing video writer...")
+            video_writer.release()
+            # video_name should be defined if video_writer exists
+            print(f"Video saved to {video_name}")
+
+        # Save concatenated numpy array if requested and data exists
+        if args.output_numpy:
+            if all_tracking_results:
+                print(
+                    f"Concatenating {len(all_tracking_results)} tracking result batches..."
+                )
+                try:
+                    # Concatenate all collected structured arrays
+                    final_results_array = np.concatenate(all_tracking_results)
+                    # Ensure filename ends with .npy
+                    numpy_filename = (
+                        args.output_numpy
+                        if args.output_numpy.lower().endswith(".npy")
+                        else args.output_numpy + ".npy"
+                    )
+                    print(
+                        f"Saving {len(final_results_array)} tracking records to {numpy_filename}..."
+                    )
+                    np.save(numpy_filename, final_results_array)
+                    print("NumPy results saved successfully.")
+                    # You can print the dtype (structure) if needed:
+                    # print(f"Saved NumPy array structure (dtype): {final_results_array.dtype}")
+                except Exception as e:
+                    print(f"Error saving NumPy results to {args.output_numpy}: {e}")
+            else:
+                print("No tracking results were generated to save to NumPy file.")
+
+    print("Script finished.")
+
+
+if __name__ == "__main__":
+    main()
+
