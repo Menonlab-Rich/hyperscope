@@ -437,6 +437,101 @@ class DiceLoss(nn.Module):
                 0.0, device=predict.device, dtype=predict.dtype
             )  # Or handle as appropriate
 
+# Author: Arash Khoeini
+# Email: arashkhoeini[at]gmail[dot]com
+
+class InfoNCE(torch.nn.Module):
+    def __init__(self, temperature=0.5):
+        super(InfoNCE, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, features):
+        """
+        Computes the InfoNCE loss.
+        
+        Args:
+            features (torch.Tensor): The feature matrix of shape [2 * batch_size, feature_dim], 
+                                     where features[:batch_size] are the representations of 
+                                     the first set of augmented images, and features[batch_size:] 
+                                     are the representations of the second set.
+        
+        Returns:
+            torch.Tensor: The computed InfoNCE loss.
+        """
+        # Normalize features to have unit norm
+        features = F.normalize(features, dim=1)
+        
+        # Compute similarity matrix
+        similarity_matrix = torch.matmul(features, features.T) / self.temperature
+
+        # Get batch size
+        batch_size = features.shape[0] // 2
+        
+        # Construct labels where each sample's positive pair is in the other view
+        labels = torch.arange(batch_size, device=features.device)
+        labels = torch.cat([labels + batch_size, labels], dim=0)
+
+        # Mask out self-similarities by setting the diagonal elements to -inf
+        mask = torch.eye(2 * batch_size, dtype=torch.bool, device=features.device)
+        similarity_matrix = similarity_matrix.masked_fill(mask, -float('inf'))
+        
+        # InfoNCE loss
+        loss = F.cross_entropy(similarity_matrix, labels)
+        
+        return loss
+
+class PixelWiseInfoNCE(torch.nn.Module):
+    def __init__(self, temperature=0.5):
+        super(PixelWiseInfoNCE, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, features_v1, features_v2): # Expects two separate feature tensors
+        """
+        Computes the InfoNCE loss for pixel-level features.
+        
+        Args:
+            features_v1 (torch.Tensor): Feature matrix from the first augmented view. Shape: [B, C, H_feat, W_feat]
+            features_v2 (torch.Tensor): Feature matrix from the second augmented view. Shape: [B, C, H_feat, W_feat]
+        
+        Returns:
+            torch.Tensor: The computed InfoNCE loss.
+        """
+        # Flatten features from (B, C, H_feat, W_feat) to (B*H_feat*W_feat, C)
+        # and normalize.
+        features_v1_flat = F.normalize(features_v1.permute(0, 2, 3, 1).reshape(-1, features_v1.shape[1]), dim=1)
+        features_v2_flat = F.normalize(features_v2.permute(0, 2, 3, 1).reshape(-1, features_v2.shape[1]), dim=1)
+        
+        # Now the 'batch_size' for InfoNCE is the total number of pixels/patches per original image batch
+        pixel_batch_size = features_v1_flat.shape[0] # B * H_feat * W_feat
+
+        # Concatenate features: features_v1_flat stacked on top of features_v2_flat
+        # Shape: [2 * pixel_batch_size, C]
+        features_combined = torch.cat([features_v1_flat, features_v2_flat], dim=0)
+
+        # Compute similarity matrix: [2 * pixel_batch_size, 2 * pixel_batch_size]
+        similarity_matrix = torch.matmul(features_combined, features_combined.T) / self.temperature
+
+        # Construct labels:
+        # For a pixel `i` from `features_v1_flat` (at index `i`), its positive is `features_v2_flat[i]` (at index `i + pixel_batch_size`)
+        # For a pixel `j` from `features_v2_flat` (at index `j + pixel_batch_size`), its positive is `features_v1_flat[j]` (at index `j`)
+        
+        # Labels for the first half (queries from features_v1_flat)
+        labels_first_half = torch.arange(pixel_batch_size, device=features_combined.device) + pixel_batch_size
+        
+        # Labels for the second half (queries from features_v2_flat)
+        labels_second_half = torch.arange(pixel_batch_size, device=features_combined.device)
+
+        # Concatenate labels: [positives for first half, positives for second half]
+        labels = torch.cat([labels_first_half, labels_second_half], dim=0)
+
+        # Mask out self-similarities
+        mask = torch.eye(2 * pixel_batch_size, dtype=torch.bool, device=features_combined.device)
+        similarity_matrix = similarity_matrix.masked_fill(mask, -float('inf'))
+        
+        # InfoNCE loss (cross-entropy)
+        loss = F.cross_entropy(similarity_matrix, labels)
+        
+        return loss
 
 # Example usage
 if __name__ == "__main__":

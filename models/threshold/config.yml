@@ -1,0 +1,78 @@
+# -----------------
+# Path and System Configurations
+# -----------------
+paths:
+  output: ${path:~/training_output/models/}
+  data: ${path:~/data/worms}
+
+# -----------------
+# Neptune Logger
+# -----------------
+neptune:
+  project: "richbai90/threshold"
+  tags: ["training", "worms"]
+
+# -----------------
+# Training Configurations
+# -----------------
+training:
+  epochs: 25
+  precision: 16
+  accelerator: "gpu"
+  n_devices: 1
+  grad_batches: 1
+  gradient_clip_val: 1.0
+  log_every_n_steps: 50
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
+
+  swa:
+    enable: true
+    lrs: 0.01
+    epoch_start: "${math:training.epochs // 2}"
+
+# -----------------
+# Model Checkpointing
+# -----------------
+checkpoint:
+  enable: true
+  monitor: "val_loss"
+  mode: "min"
+  filename: "threshold-{epoch:02d}-{val_loss:.2f}"
+  save_top_k: 3
+
+# -----------------
+# DataModule Configurations
+# -----------------
+data_module:
+  # Using the new ${path:...} resolver
+  data_dir: ${paths.data}
+  batch_size: 16
+  num_workers: 4
+  image_size: [512, 512]
+  processor_model_name: "microsoft/swin-base-patch4-window7-224-in22k"
+  train_val_test_split: [0.8, 0.1, 0.1]
+  seed: 42
+
+# -----------------
+# Model and Optimizer Configurations
+# -----------------
+model:
+  learning_rate: 0.001
+  loss_params:
+    lambda_entropy: 0.7
+    lambda_contrastive: 0.3
+    n_classes: 1
+    temp: 0.07
+    # Optimizer name and configs (https://docs.pytorch.org/docs/stable/optim.html)
+    # Name must match the name of the optimizer class as found in the documentation.
+    # Params additional params will be passed as kwargs to the chosen optimizer
+    optimizer:
+      name: "AdamW"
+      lr: 1e-4
+    # Scheduler name and configs. See note for optimizer. Same principals apply.
+    scheduler:
+      name: "CosineAnnealingLR"
+      T_max: ${training.swa.epoch_start}
+      eta_min: 1e-6
+    
