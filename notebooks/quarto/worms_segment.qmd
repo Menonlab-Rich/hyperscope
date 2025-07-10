@@ -1,0 +1,27 @@
+---
+title: "Segment images"
+format:
+  html:
+    code-fold: true
+jupyter: python3
+---
+
+The first thing we need to do is load the h5 files
+
+```{python}
+import h5py
+with h5py.File('/mnt/d/rich/hyper-scope/data/raw/worms/100mhz_dataset_20250409_150936.h5', 'r') as f:
+  print f['worms'].dims)
+
+```
+
+
+
+
+
+
+
+
+
+
+

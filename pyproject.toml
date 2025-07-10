@@ -15,7 +15,12 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License"
 ]
-requires-python = "~=3.10"
+requires-python = ">=3.10"
+dependencies = [
+    "numba>=0.61.2",
+    "omegaconf>=2.3.0",
+    "transformers>=4.53.0",
+]
 
 [tool.black]
 line-length = 99
