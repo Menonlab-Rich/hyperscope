@@ -2,8 +2,8 @@
 # Path and System Configurations
 # -----------------
 paths:
-  output: ${path:~/training_output/models/}
-  data: ${path:~/data/worms}
+  output: ${path:"~/data/transfer/output"}
+  data: ${path:"~/data/worms10/images"}
 
 # -----------------
 # Neptune Logger
@@ -29,7 +29,7 @@ training:
   swa:
     enable: true
     lrs: 0.01
-    epoch_start: "${math:training.epochs // 2}"
+    epoch_start: ${math:"${training.epochs} // 2"}
 
 # -----------------
 # Model Checkpointing

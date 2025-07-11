@@ -94,7 +94,7 @@ class Threshold(pl.LightningModule):
         return total_loss
 
     def validation_step(self, batch, batch_idx):
-        total_loss, L_entropy, L_contrastive = self._shared_step(batch, batch_idx)
+        total_loss, L_entropy, L_contrastive = self._shared_step(batch)
 
         self.log("val_loss", total_loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         self.log(
@@ -114,6 +114,34 @@ class Threshold(pl.LightningModule):
             logger=True,
         )
 
+        return total_loss
+
+    def test_step(self, batch, batch_idx):
+        """
+        Generates and logs binary threshold images for the first test batch.
+        """
+        # We only log the first batch to avoid excessive logging
+        if batch_idx == 0:
+            image_view, _ = batch  # We only need one view for inference
+            
+            # 1. Get model output
+            logits, _ = self.model(image_view)
+            prob_map = torch.sigmoid(logits)
+
+            # 2. Create binary mask from probabilities
+            binary_mask = (prob_map > 0.5).float()
+
+            # 3. Create grids of images for visualization
+            input_grid = torchvision.utils.make_grid(image_view, normalize=True)
+            mask_grid = torchvision.utils.make_grid(binary_mask)
+
+            # 4. Log the input images and output masks to Neptune
+            self.logger.experiment["test/predictions/inputs"].upload(File.as_image(input_grid))
+            self.logger.experiment["test/predictions/masks"].upload(File.as_image(mask_grid))
+
+        # Calculate and log the test loss
+        total_loss, _, _ = self._shared_step(batch)
+        self.log("test_loss", total_loss, on_step=False, on_epoch=True)
         return total_loss
 
     def configure_optimizers(self):

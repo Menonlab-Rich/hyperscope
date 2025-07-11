@@ -28,134 +28,92 @@ class DoubleConv(nn.Module):
     def forward(self, x):
         return self.double_conv(x)
 
-
 class Up(nn.Module):
     """Upscaling then double conv"""
 
-    def __init__(self, in_channels, encoder_skip_channels, out_channels, bilinear=True):
+    def __init__(self, in_channels, skip_channels, out_channels, bilinear=True):
         super().__init__()
-
+        self.out_channels = out_channels
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-            self.conv = DoubleConv(in_channels + encoder_skip_channels, out_channels)
+            # The input to DoubleConv is the sum of channels from the previous 
+            # decoder layer and the skip connection from the encoder.
+            self.conv = DoubleConv(in_channels + skip_channels, out_channels, mid_channels=in_channels)
         else:
-            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-            self.conv = DoubleConv((in_channels // 2) + encoder_skip_channels, out_channels)
+            self.up = nn.ConvTranspose2d(in_channels, in_channels, kernel_size=2, stride=2)
+            self.conv = DoubleConv(in_channels + skip_channels, out_channels, mid_channels=in_channels)
 
     def forward(self, x1, x2):
+        # x1 is from the previous decoder layer, x2 is the skip connection
         x1 = self.up(x1)
         
+        # Pad x1 to match the spatial dimensions of x2
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
-
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2])
         
-        x = torch.cat([x2, x1], dim=1) 
+        x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
+# In threshold/model.py
 
 class Decoder(nn.Module):
     def __init__(self, in_shape, encoder_hidden_sizes, num_classes=1, bilinear=True):
         super().__init__()
         
         self.in_height, self.in_width = in_shape
-        self.encoder_hidden_sizes = encoder_hidden_sizes # Store for dynamic calculations in forward
+        self.encoder_hidden_sizes = encoder_hidden_sizes
         
-        # Up1: Processes output from encoder_fm[3] (1024 ch) and combines with encoder_fm[2] (512 ch)
-        self.up1 = Up(encoder_hidden_sizes[3], encoder_hidden_sizes[2], encoder_hidden_sizes[2], bilinear)
-        
-        # Up2: Processes output from up1 (512 ch) and combines with encoder_fm[1] (256 ch)
-        self.up2 = Up(encoder_hidden_sizes[2], encoder_hidden_sizes[1], encoder_hidden_sizes[1], bilinear) 
+        # Define the number of channels for each decoder stage
 
-        # Up3: Processes output from up2 (256 ch) and combines with encoder_fm[0] (128 ch)
-        self.up3 = Up(encoder_hidden_sizes[1], encoder_hidden_sizes[0], encoder_hidden_sizes[0], bilinear)
+        # Up1: Processes encoder_fm[3] (1024 ch) and combines with encoder_fm[2] (512 ch)
+        self.up1 = Up(encoder_hidden_sizes[3], encoder_hidden_sizes[3], encoder_hidden_sizes[2], bilinear)
         
-        # Swin's last stage (encoder_fm[3]) is H/32 resolution.
-        # After up3, we are at H/4 resolution.
-        # We need to reach H/1 resolution (original input size).
-        # H/4 -> H/2 (1st step) -> H/1 (2nd step) = 2 more upsampling steps.
+        # Up2: Processes output from up1 and combines with encoder_fm[1]
+        self.up2 = Up(encoder_hidden_sizes[2], encoder_hidden_sizes[2], encoder_hidden_sizes[1], bilinear)
+
+        # Up3: Processes output from up2 and combines with encoder_fm[0]
+        self.up3 = Up(encoder_hidden_sizes[1], encoder_hidden_sizes[1], encoder_hidden_sizes[0], bilinear)
         
+        # Further upsampling to reach the original input resolution
         self.up4 = nn.Sequential(
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-            DoubleConv(encoder_hidden_sizes[0], encoder_hidden_sizes[0] // 2) 
+            DoubleConv(encoder_hidden_sizes[0], encoder_hidden_sizes[0] // 2)
         )
         
         self.up5 = nn.Sequential(
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-            DoubleConv(encoder_hidden_sizes[0] // 2, 64) 
+            DoubleConv(encoder_hidden_sizes[0] // 2, 64)
         )
         
-        # Final output convolution to create num_classes
         self.out_conv = nn.Conv2d(64, num_classes, kernel_size=1)
-        
 
     def forward(self, encoder_features):
-        
         encoder_fm = []
-        # Downsampling factors for each stage of the Swin Transformer
-        # (Assuming Swin base with 4 stages after initial patch embedding)
-        # These factors apply to the original input image dimensions
-        downsample_factors = [4, 8, 16, 32] # For stages 0, 1, 2, 3 respectively
+        downsample_factors = [8, 16, 32, 32]
 
-        # We need the outputs of the 4 main stages (indices 1 to 4 from encoder_features)
-        # `encoder_features` will be `encoder_outputs.hidden_states` (length 5 for Swin Base)
-        for i in range(len(downsample_factors)): 
-            h_state = encoder_features[i+1] # +1 because hidden_states[0] is initial patch embedding
+        for i in range(len(downsample_factors)):
+            h_state = encoder_features[i + 1]
             b, n, c = h_state.shape
+            h_feat = self.in_height // downsample_factors[i]
+            w_feat = self.in_width // downsample_factors[i]
             
-            # Dynamically calculate H_feat, W_feat based on original input size
-            # and the downsample factor for this specific stage.
-            h_feat_expected = self.in_height // downsample_factors[i]
-            w_feat_expected = self.in_width // downsample_factors[i]
-            
-            # Sanity check: Ensure num_patches matches calculated spatial dims
-            if h_feat_expected * w_feat_expected != n:
-                 # This can happen if input resolution is not perfectly divisible
-                 # by the downsample factor, or if it's not the model's default.
+            if h_feat * w_feat != n:
+                warnings.warn(f"Feature map at stage {i} has {n} patches, which does not match the expected size of {h_feat}x{w_feat}. Reshaping based on 'n'.")
+                h_feat = int(math.sqrt(n))
+                w_feat = h_feat
 
-                 h_feat = int(round(math.sqrt(n)))
-                 w_feat = int(round(math.sqrt(n)))
-                 if h_feat * w_feat != n: # Re-check after rounding if it's still an issue
-                    raise ValueError(f"Feature map at stage {i} has {n} patches. "
-                                     f"Calculated dimensions {h_feat}x{w_feat} do not match num_patches. "
-                                     f"Input {self.in_height}x{self.in_width}. "
-                                     "Consider input resolution or Swin model's internal resizing.")
-                 if (h_feat != h_feat_expected or w_feat != w_feat_expected) and (abs(h_feat - h_feat_expected) > 1 or abs(w_feat - w_feat_expected) > 1): # Allowing for +/- 1 pixel difference
-                    warnings.warn(f"Swin stage {i} output: Actual {h_feat}x{w_feat} from {n} patches, "
-                              f"but expected {h_feat_expected}x{w_feat_expected} for input {self.in_height}x{self.in_width}. "
-                              "This discrepancy indicates the Swin encoder's behavior might not perfectly align with integer division. "
-                              "Decoder will proceed with actual dimensions.")
             encoder_fm.append(h_state.permute(0, 2, 1).reshape(b, c, h_feat, w_feat))
-        
-        # Now, encoder_fm is a list of (B, C, H, W) tensors from stages 0 to 3:
-        # encoder_fm[0] is from Stage 0 (H/4 resolution)
-        # encoder_fm[1] is from Stage 1 (H/8 resolution)
-        # encoder_fm[2] is from Stage 2 (H/16 resolution)
-        # encoder_fm[3] is from Stage 3 (H/32 resolution)
 
-        # Decoder path:
-        # Start with the deepest feature map (lowest resolution) from the encoder
-        x = encoder_fm[3] # (B, 1024, H/32, W/32)
-
-        # Up 1: Combines x (from previous decoder) with encoder_fm[2] (skip connection)
-        x = self.up1(x, encoder_fm[2]) # Output is (B, 512, H/16, W/16)
-        
-        # Up 2: Combines x (from up1) with encoder_fm[1] (skip connection)
-        x = self.up2(x, encoder_fm[1]) # Output is (B, 256, H/8, W/8)
-        
-        # Up 3: Combines x (from up2) with encoder_fm[0] (skip connection)
-        x = self.up3(x, encoder_fm[0]) # Output is (B, 128, H/4, W/4)
-        
-        # Remaining upsampling steps to reach full resolution
-        # From H/4 to H/2:
-        x = self.up4(x) # (B, 64, H/2, W/2)
-        
-        # From H/2 to H/1 (original input resolution):
-        x = self.up5(x) # (B, 64, H, W)
+        # Decoder path
+        x = self.up1(encoder_fm[3], encoder_fm[2])
+        x = self.up2(x, encoder_fm[1])
+        x = self.up3(x, encoder_fm[0])
+        x = self.up4(x)
+        x = self.up5(x)
 
         contrastive_features = x
-        return self.out_conv(x), contrastive_features # Final output logits and feature map (For constrastive loss)
-
+        return self.out_conv(x), contrastive_features
 
 class Threshold(nn.Module):
     def __init__(self, 
@@ -165,19 +123,20 @@ class Threshold(nn.Module):
                  bilinear: bool = True):
         super().__init__()
         
+        self.out_shape = out_shape
+        
         # Encoder
-        self.encoder = SwinForImageClassification.from_pretrained(encoder_name)
+        self.encoder = SwinForImageClassification.from_pretrained(encoder_name, ignore_mismatched_sizes = True)
         
         # Configure encoder to always return hidden states
-        # self.encoder.config.output_hidden_states = True # It's True by default
-        
-        # Get hidden sizes for decoder initialization
-        encoder_hidden_sizes = self.encoder.config.hidden_sizes
+        self.encoder.config.output_hidden_states = True
+        base_hidden_size = self.encoder.config.hidden_size // 8  # This is the base channel dimension, e.g., 128
+        num_encoder_stages = len(self.encoder.config.depths) # The number of stages, e.g., 4
+        encoder_hidden_sizes = [base_hidden_size, base_hidden_size * 2, base_hidden_size * 4, base_hidden_size * 8]		
 
         # Pass the desired input shape to the decoder for dynamic feature map reshaping
         self.decoder = Decoder(out_shape, encoder_hidden_sizes, num_classes, bilinear) # Using out_shape as in_shape for decoder
 
-        self.out_shape = out_shape
 
     def forward(self, x):
         # x is the input image tensor (batch_size, channels, height, width)
