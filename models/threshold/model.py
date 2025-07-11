@@ -38,10 +38,10 @@ class Up(nn.Module):
             self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
             # The input to DoubleConv is the sum of channels from the previous 
             # decoder layer and the skip connection from the encoder.
-            self.conv = DoubleConv(in_channels + skip_channels, out_channels, mid_channels=in_channels)
+            self.conv = DoubleConv(in_channels + skip_channels, out_channels)
         else:
             self.up = nn.ConvTranspose2d(in_channels, in_channels, kernel_size=2, stride=2)
-            self.conv = DoubleConv(in_channels + skip_channels, out_channels, mid_channels=in_channels)
+            self.conv = DoubleConv(in_channels + skip_channels, out_channels)
 
     def forward(self, x1, x2):
         # x1 is from the previous decoder layer, x2 is the skip connection
@@ -67,13 +67,13 @@ class Decoder(nn.Module):
         # Define the number of channels for each decoder stage
 
         # Up1: Processes encoder_fm[3] (1024 ch) and combines with encoder_fm[2] (512 ch)
-        self.up1 = Up(encoder_hidden_sizes[3], encoder_hidden_sizes[3], encoder_hidden_sizes[2], bilinear)
+        self.up1 = Up(encoder_hidden_sizes[3], encoder_hidden_sizes[2], encoder_hidden_sizes[2], bilinear)
         
         # Up2: Processes output from up1 and combines with encoder_fm[1]
-        self.up2 = Up(encoder_hidden_sizes[2], encoder_hidden_sizes[2], encoder_hidden_sizes[1], bilinear)
+        self.up2 = Up(encoder_hidden_sizes[2], encoder_hidden_sizes[1], encoder_hidden_sizes[1], bilinear)
 
         # Up3: Processes output from up2 and combines with encoder_fm[0]
-        self.up3 = Up(encoder_hidden_sizes[1], encoder_hidden_sizes[1], encoder_hidden_sizes[0], bilinear)
+        self.up3 = Up(encoder_hidden_sizes[1], encoder_hidden_sizes[0], encoder_hidden_sizes[0], bilinear)
         
         # Further upsampling to reach the original input resolution
         self.up4 = nn.Sequential(
