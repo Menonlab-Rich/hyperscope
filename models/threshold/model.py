@@ -123,7 +123,7 @@ class Threshold(nn.Module):
                  bilinear: bool = True):
         super().__init__()
         
-        self.out_shape = out_shape
+        self.out_shape = tuple(out_shape)
         
         # Encoder
         self.encoder = SwinForImageClassification.from_pretrained(encoder_name, ignore_mismatched_sizes = True)
@@ -132,7 +132,7 @@ class Threshold(nn.Module):
         self.encoder.config.output_hidden_states = True
         base_hidden_size = self.encoder.config.hidden_size // 8  # This is the base channel dimension, e.g., 128
         num_encoder_stages = len(self.encoder.config.depths) # The number of stages, e.g., 4
-        encoder_hidden_sizes = [base_hidden_size, base_hidden_size * 2, base_hidden_size * 4, base_hidden_size * 8]		
+        encoder_hidden_sizes = [256, 512, 1024, 1024]
 
         # Pass the desired input shape to the decoder for dynamic feature map reshaping
         self.decoder = Decoder(out_shape, encoder_hidden_sizes, num_classes, bilinear) # Using out_shape as in_shape for decoder

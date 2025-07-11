@@ -47,17 +47,18 @@ class Threshold(pl.LightningModule):
         
         # Forward pass for both augmented views
         logits_v1, features_v1 = self.model(image_view1)
+        prob_map_v1 = torch.sigmoid(logits_v1)
+        L_entropy_v1 = -torch.mean(-prob_map_v1 * torch.log(prob_map_v1 + 1e-8) - (1 - prob_map_v1) * torch.log(1 - prob_map_v1 + 1e-8))
+
         logits_v2, features_v2 = self.model(image_view2)
+        prob_map_v2 = torch.sigmoid(logits_v2)
+        L_entropy_v2 = -torch.mean(-prob_map_v2 * torch.log(prob_map_v2 + 1e-8) - (1 - prob_map_v2) * torch.log(1 - prob_map_v2 + 1e-8))
 
         # 1. Calculate Entropy Loss
         # Apply sigmoid to logits to get probability maps
-        prob_map_v1 = torch.sigmoid(logits_v1)
-        prob_map_v2 = torch.sigmoid(logits_v2)
         
         # Calculate the entropy for each view. Add a small epsilon for numerical stability.
         # The goal is to maximize entropy, which is equivalent to minimizing the negative entropy.
-        L_entropy_v1 = -torch.mean(-prob_map_v1 * torch.log(prob_map_v1 + 1e-8) - (1 - prob_map_v1) * torch.log(1 - prob_map_v1 + 1e-8))
-        L_entropy_v2 = -torch.mean(-prob_map_v2 * torch.log(prob_map_v2 + 1e-8) - (1 - prob_map_v2) * torch.log(1 - prob_map_v2 + 1e-8))
 
         L_entropy = (L_entropy_v1 + L_entropy_v2) / 2 # Average over views
 
