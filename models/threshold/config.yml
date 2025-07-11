@@ -16,7 +16,7 @@ neptune:
 # Training Configurations
 # -----------------
 training:
-  epochs: 25
+  epochs: 15
   precision: "16-mixed"
   accelerator: "gpu"
   n_devices: 1
@@ -30,6 +30,10 @@ training:
     enable: true
     lrs: 0.01
     epoch_start: ${math:"${training.epochs} // 2"}
+
+  test_after_epoch:
+    enable: true
+    every_n: 3
 
 # -----------------
 # Model Checkpointing
@@ -60,8 +64,8 @@ data_module:
 model:
   learning_rate: 0.001
   loss_params:
-    lambda_entropy: 0.7
-    lambda_contrastive: 0.3
+    lambda_entropy: 0.4
+    lambda_contrastive: 0.6
     n_classes: 1
     temp: 0.07
     # Optimizer name and configs (https://docs.pytorch.org/docs/stable/optim.html)
