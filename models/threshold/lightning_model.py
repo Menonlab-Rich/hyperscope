@@ -31,6 +31,7 @@ class Threshold(pl.LightningModule):
         optimizer_configs: Dict[str, Any] = {},
         scheduler_configs: Dict[str, Any] = {},
         log_sample_interval=float("inf"),
+        include_decoder=True,
     ):
         super().__init__()
         # self.save_hyperparameters() saves arguments. Model and loss objects are complex,
@@ -40,10 +41,20 @@ class Threshold(pl.LightningModule):
             logger=False
         )  # Use logger=False to avoid issues with non-serializable objects if self.model/loss_fn are passed directly.
 
-        self.model = _Threshold(out_shape=out_shape, num_classes=n_classes)
+        self.model = _Threshold(
+            out_shape=out_shape, num_classes=n_classes, decoder=include_decoder
+        )
         self.contrastive_loss_fn = PixelWiseInfoNCE(temp)
         self.lambda_entropy = lambda_entropy
         self.lambda_contrastive = lambda_contrastive
+        if self.lambda_contrastive != 1 and include_decoder is False:
+            raise ValueError(
+                "Setting a lambda value for contrastive loss is not supported when the decoder path is not included. Set the lambda contrastive value to 1 to fix this error, or include the decoder path."
+            )
+        if self.lambda_entropy != 0 and include_decoder is False:
+            raise ValueError(
+                "Setting a lambda value for entropy loss is not supported when decoder path is not included. Set the lambda entropy value to 0 to fix this error, or include the decoder path."
+            )
         self.learning_rate = learning_rate
         self.optimizer_configs = optimizer_configs
         self.scheduler_configs = scheduler_configs
@@ -59,13 +70,15 @@ class Threshold(pl.LightningModule):
         for view in batch:
             # Forward pass for both augmented views
             logits, feats = self.model(view)
-            prob_map = torch.sigmoid(logits)
-            entropy = -torch.mean(
-                -prob_map * torch.log(prob_map + 1e-8)
-                - (1 - prob_map) * torch.log(1 - prob_map + 1e-8)
-            )
+            if self.hparams.include_decoder:
+                prob_map = torch.sigmoid(logits)
+                entropy = -torch.mean(
+                    -prob_map * torch.log(prob_map + 1e-8)
+                    - (1 - prob_map) * torch.log(1 - prob_map + 1e-8)
+                )
 
-            entropies.append(entropy)
+                entropies.append(entropy)
+
             features.append(feats)
 
         # 1. Calculate Entropy Loss
@@ -74,7 +87,10 @@ class Threshold(pl.LightningModule):
         # Calculate the entropy for each view. Add a small epsilon for numerical stability.
         # The goal is to maximize entropy, which is equivalent to minimizing the negative entropy.
 
-        L_entropy = torch.stack(entropies).mean()
+        if len(entropies):
+            L_entropy = torch.stack(entropies).mean()
+        else:
+            L_entropy = 0
 
         # 2. Calculate Contrastive Loss
         total_contrastive_loss = 0.0
@@ -155,7 +171,9 @@ class Threshold(pl.LightningModule):
         features_np = features.cpu().numpy()
 
         # Cluster
-        kmeans = KMeans(n_clusters=self.hparams.n_classes, random_state=42, n_init="auto").fit(features_np)
+        kmeans = KMeans(n_clusters=self.hparams.n_classes, random_state=42, n_init="auto").fit(
+            features_np
+        )
         labels = kmeans.labels_
 
         # Dimensionality reduction for plotting
