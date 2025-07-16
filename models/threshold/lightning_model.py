@@ -170,6 +170,17 @@ class Threshold(pl.LightningModule):
         features = features.permute(0, 2, 3, 1).reshape(-1, features.shape[1])
         features_np = features.cpu().numpy()
 
+        # --- Check for Feature Collapse ---
+        # Calculate the variance of the features. If it's near zero, they have collapsed.
+        feature_variance = np.var(features_np)
+        self.log(f"val/feature_variance_epoch_{self.current_epoch}", feature_variance)
+
+        if feature_variance < 1e-6:
+            warnings.warn(
+                f"Feature variance is {feature_variance:.2E} at epoch {self.current_epoch}, indicating feature collapse. Skipping clustering plot."
+            )
+            return
+
         # Cluster
         kmeans = KMeans(n_clusters=self.hparams.n_classes, random_state=42, n_init="auto").fit(
             features_np
@@ -185,7 +196,8 @@ class Threshold(pl.LightningModule):
             x=features_2d[:, 0],
             y=features_2d[:, 1],
             hue=labels,
-            s=5,
+            palette=sns.color_palette("deep", n_colors=self.hparams.n_classes),
+            s=8,
             alpha=0.7,
             legend="full",
             ax=ax,
