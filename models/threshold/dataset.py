@@ -137,6 +137,8 @@ class UnsupervisedNPYDataset(Dataset):
         for view in views:
             # The model expects a 3-channel image, so we repeat the single channel if needed.
             if view.shape[0] == 1:
+                if view.ndim == 2:
+                    view = view.unsqueeze(0)
                 view = view.repeat(3, 1, 1)
 
             processed_view = self.processor(
