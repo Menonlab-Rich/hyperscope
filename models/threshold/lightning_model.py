@@ -1,15 +1,22 @@
+import io
+import itertools
 import warnings
 from logging import warning
 from typing import Any, Dict, Tuple
 
+import matplotlib.pyplot as plt
+import numpy as np
 import pytorch_lightning as pl
+import seaborn as sns
 import torch
 import torch.nn.functional as F
+import torchvision
 from base.loss import PixelWiseInfoNCE
 from model import Threshold as _Threshold
-from torch.optim import Optimizer
-import torchvision
 from neptune.types import File
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from torch.optim import Optimizer
 
 
 class Threshold(pl.LightningModule):
@@ -23,7 +30,7 @@ class Threshold(pl.LightningModule):
         temp: float = 0.5,
         optimizer_configs: Dict[str, Any] = {},
         scheduler_configs: Dict[str, Any] = {},
-        log_sample_interval = float('inf')
+        log_sample_interval=float("inf"),
     ):
         super().__init__()
         # self.save_hyperparameters() saves arguments. Model and loss objects are complex,
@@ -47,22 +54,19 @@ class Threshold(pl.LightningModule):
         return self.model(x)
 
     def _shared_step(self, batch):
-        image_view1, image_view2 = batch
 
-        # Forward pass for both augmented views
-        logits_v1, features_v1 = self.model(image_view1)
-        prob_map_v1 = torch.sigmoid(logits_v1)
-        L_entropy_v1 = -torch.mean(
-            -prob_map_v1 * torch.log(prob_map_v1 + 1e-8)
-            - (1 - prob_map_v1) * torch.log(1 - prob_map_v1 + 1e-8)
-        )
+        features, entropies = [], []
+        for view in batch:
+            # Forward pass for both augmented views
+            logits, feats = self.model(view)
+            prob_map = torch.sigmoid(logits)
+            entropy = -torch.mean(
+                -prob_map * torch.log(prob_map + 1e-8)
+                - (1 - prob_map) * torch.log(1 - prob_map + 1e-8)
+            )
 
-        logits_v2, features_v2 = self.model(image_view2)
-        prob_map_v2 = torch.sigmoid(logits_v2)
-        L_entropy_v2 = -torch.mean(
-            -prob_map_v2 * torch.log(prob_map_v2 + 1e-8)
-            - (1 - prob_map_v2) * torch.log(1 - prob_map_v2 + 1e-8)
-        )
+            entropies.append(entropy)
+            features.append(feats)
 
         # 1. Calculate Entropy Loss
         # Apply sigmoid to logits to get probability maps
@@ -70,10 +74,15 @@ class Threshold(pl.LightningModule):
         # Calculate the entropy for each view. Add a small epsilon for numerical stability.
         # The goal is to maximize entropy, which is equivalent to minimizing the negative entropy.
 
-        L_entropy = (L_entropy_v1 + L_entropy_v2) / 2  # Average over views
+        L_entropy = torch.stack(entropies).mean()
 
         # 2. Calculate Contrastive Loss
-        L_contrastive = self.contrastive_loss_fn(features_v1, features_v2)
+        total_contrastive_loss = 0.0
+        n_pairs = 0
+        for i, j in itertools.combinations(range(len(features)), 2):
+            total_contrastive_loss += self.contrastive_loss_fn(features[i], features[j])
+            n_pairs += 1
+        L_contrastive = total_contrastive_loss / n_pairs if n_pairs > 0 else 0.0
 
         # Total Loss
         # We ADD the entropy loss because we are minimizing the NEGATIVE entropy.
@@ -134,35 +143,55 @@ class Threshold(pl.LightningModule):
         """
         Generates and logs binary threshold images for the first test batch.
         """
-        # We only log the first batch to avoid excessive logging
-        if batch_idx == 0:
-            image_view1, image_view2 = batch  # We only need one view for inference
+        if batch_idx > 0:
+            return  # Log only on the first batch to avoid clutter
 
-            # 1. Get model output
-            logits, _ = self.model(image_view1)
-            prob_map = torch.sigmoid(logits)
+        image_view = batch[0][0:1]  # (1, C, H, W)
 
-            # 2. Create binary mask from probabilities
-            binary_mask = (prob_map > 0.5).float()
+        with torch.no_grad():
+            _, features = self.model(image_view)
 
-            image_view = torch.cat([image_view1, image_view2], dim=0)
+        features = features.permute(0, 2, 3, 1).reshape(-1, features.shape[1])
+        features_np = features.cpu().numpy()
 
-            # 3. Create grids of images for visualization
-            input_grid = torchvision.utils.make_grid(image_view, normalize=True)
-            mask_grid = torchvision.utils.make_grid(binary_mask)
+        # Cluster
+        kmeans = KMeans(n_clusters=self.hparams.n_classes, random_state=42, n_init="auto").fit(features_np)
+        labels = kmeans.labels_
 
-            # 4. Permute from (C, H, W) to (H, W, C) before converting to numpy
-            input_grid_np = input_grid.detach().cpu().permute(1, 2, 0).numpy()
-            mask_grid_np = mask_grid.detach().cpu().permute(1, 2, 0).numpy()
+        # Dimensionality reduction for plotting
+        pca = PCA(n_components=2)  # h, w
+        features_2d = pca.fit_transform(features_np)
 
-            # 5. Log the input images and output masks to Neptune
-            self.logger.experiment["test/predictions/inputs"].log(
-                File.as_image(input_grid_np)
-            )
-            self.logger.experiment["test/predictions/masks"].log(
-                File.as_image(mask_grid_np)
-            )
+        fig, ax = plt.subplots(figsize=(10, 8))
+        scatter = sns.scatterplot(
+            x=features_2d[:, 0],
+            y=features_2d[:, 1],
+            hue=labels,
+            s=5,
+            alpha=0.7,
+            legend="full",
+            ax=ax,
+        )
 
+        ax.set_title(f"Feature Space Clustering (Epoch {self.current_epoch})")
+        ax.set_xlabel("Principal Component 1")
+        ax.set_ylabel("Principal Component 2")
+        plt.tight_layout()
+
+        # Save plot to a buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        buf.seek(0)
+
+        # 6. Log the input image and the feature plot to Neptune
+        input_grid = torchvision.utils.make_grid(image_view, normalize=True)
+        self.logger.experiment["test/visualizations/input_image"].log(
+            File.as_image(input_grid.detach().cpu().permute(1, 2, 0).numpy())
+        )
+        self.logger.experiment["test/visualizations/feature_clusters"].log(File(buf))
+
+        # Close the plot to free up memory
+        plt.close(fig)
 
     def configure_optimizers(self):
         # Optimizer

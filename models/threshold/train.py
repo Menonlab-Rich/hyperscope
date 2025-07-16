@@ -82,6 +82,7 @@ if __name__ == "__main__":
         processor_model_name=cfg.data_module.processor_model_name,
         train_val_test_split=tuple(cfg.data_module.train_val_test_split),
         seed=cfg.data_module.seed,
+        n_views=cfg.data_module.n_views,
     )
 
     # 6. Instantiate LightningModule using the class method

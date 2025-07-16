@@ -3,7 +3,7 @@
 # -----------------
 paths:
   output: ${path:"~/data/transfer/output"}
-  data: ${path:"~/data/worms10/images"}
+  data: ${path:"~/data/worms/images"}
 
 # -----------------
 # Neptune Logger
@@ -57,6 +57,7 @@ data_module:
   processor_model_name: "microsoft/swin-base-patch4-window7-224-in22k"
   train_val_test_split: [0.8, 0.1, 0.1]
   seed: 42
+  n_views: 4
 
 # -----------------
 # Model and Optimizer Configurations
@@ -66,7 +67,7 @@ model:
   loss_params:
     lambda_entropy: 0.4
     lambda_contrastive: 0.6
-    n_classes: 1
+    n_classes: 4 # assume there is some auto fluoresence
     temp: 0.07
     # Optimizer name and configs (https://docs.pytorch.org/docs/stable/optim.html)
     # Name must match the name of the optimizer class as found in the documentation.
