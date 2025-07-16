@@ -64,6 +64,7 @@ data_module:
 # -----------------
 model:
   learning_rate: 0.001
+  include_decoder: true
   loss_params:
     lambda_entropy: 0.4
     lambda_contrastive: 0.6

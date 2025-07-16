@@ -94,7 +94,8 @@ if __name__ == "__main__":
         "temp": "model.loss_params.temp",
         "out_shape": "data_module.image_size",
         "optimizer_configs": "model.loss_params.optimizer",
-        "scheduler_configs": "model.loss_params.scheduler"
+        "scheduler_configs": "model.loss_params.scheduler",
+        "include_decoder": "model.include_decoder"
     }
 
 
