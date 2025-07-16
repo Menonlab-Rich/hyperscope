@@ -12,26 +12,8 @@ from pytorch_lightning import Callback
 from pytorch_lightning.callbacks import (ModelCheckpoint,
                                          StochasticWeightAveraging)
 from pytorch_lightning.loggers import NeptuneLogger
+from neptune.types import File
 
-
-class TestOnEpochEnd(Callback):
-    """
-    Custom callback to run a test loop at the end of each training epoch.
-    """
-    def __init__(self, every_n) -> None:
-        super().__init__()
-        self.every_n = every_n
-        self.last_test_epoch = 0
-    def on_train_epoch_end(self, trainer, pl_module):
-        """
-        This hook is called after the training epoch and validation loops are finished.
-        """
-        if trainer.is_global_zero: # Ensure this only runs on the main process
-            print(f"\n--- Running test set at the end of epoch {trainer.current_epoch} ---")
-            # The trainer object has access to the model and datamodule
-            if trainer.current_epoch == self.last_test_epoch + self.every_n:
-                self.last_test_epoch = trainer.current_epoch
-                trainer.test(model=pl_module, datamodule=trainer.datamodule)
 
 if __name__ == "__main__":
     # 1. Load configuration using the new custom Config class
@@ -72,13 +54,7 @@ if __name__ == "__main__":
         swa_args = cfg.select_as_kwargs(swa_mappings)
         callbacks.append(StochasticWeightAveraging(**swa_args))
 
-    if "training.test_after_epoch" in cfg and cfg.training.test_after_epoch.enable:
-        test_after_epoch_mappings = {
-                "every_n": "training.test_after_epoch.every_n"
-        }
 
-        test_after_epoch_args = cfg.select_as_kwargs(test_after_epoch_mappings)
-        callbacks.append(TestOnEpochEnd(**test_after_epoch_args))
 
     # 4. Prepare Trainer arguments using the class method
     trainer_mappings = {
@@ -119,6 +95,10 @@ if __name__ == "__main__":
         "optimizer_configs": "model.loss_params.optimizer",
         "scheduler_configs": "model.loss_params.scheduler"
     }
+
+
+    if "training.log_samples" in cfg and cfg.training.log_samples.enable:
+        model_mappings["log_sample_interval"] = "training.log_samples.interval"
 
     model_args = cfg.select_as_kwargs(model_mappings)
     lightning_model = Threshold(**model_args)
