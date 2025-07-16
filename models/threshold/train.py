@@ -10,7 +10,7 @@ from lightning_model import Threshold
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning import Callback
 from pytorch_lightning.callbacks import (ModelCheckpoint,
-                                         StochasticWeightAveraging)
+                                         StochasticWeightAveraging, EarlyStopping)
 from pytorch_lightning.loggers import NeptuneLogger
 from neptune.types import File
 
@@ -54,6 +54,10 @@ if __name__ == "__main__":
         swa_args = cfg.select_as_kwargs(swa_mappings)
         callbacks.append(StochasticWeightAveraging(**swa_args))
 
+    if "training.early_stopping.enable" in cfg and cfg.training.early_stopping:
+        early_stop_mappings = { "monitor": "checkpoint.monitor", "patience": "training.early_stopping.patience", "mode": "checkpoint.mode" }
+        early_stop_args = cfg.select_as_kwargs(early_stop_mappings)
+        callbacks.append(EarlyStopping(**early_stop_args))
 
 
     # 4. Prepare Trainer arguments using the class method

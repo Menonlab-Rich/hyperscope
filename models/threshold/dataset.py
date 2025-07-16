@@ -19,12 +19,16 @@ from transformers import AutoImageProcessor
 class MedianFilter(nn.Module):
     """Differentiable Median Filter using Kornia."""
 
-    def __init__(self, kernel_size=(3, 3)):
+    def __init__(self, kernel_size=(3, 3), p=1.0):
         super().__init__()
         self.kernel_size = kernel_size
+        self.p = p
 
     def forward(self, data: torch.Tensor) -> torch.Tensor:
         # Kornia expects a 4D tensor (B, C, H, W)
+        p = self.p
+        if not np.random.choice([True, False], p=[p, 1 - p]):
+            return data
         is_3d = data.dim() == 3
         if is_3d:
             data = data.unsqueeze(0)
@@ -35,58 +39,74 @@ class MedianFilter(nn.Module):
             filtered = filtered.squeeze(0)
         return filtered
 
-
 class FeatureExtractorPipeline(nn.Module):
     """
-    Encapsulates the feature extraction workflow to generate a binary mask.
-    NOTE: The use of .cpu().numpy() makes this part of the pipeline non-differentiable
-    and can be a performance bottleneck due to CPU-GPU sync. This is acceptable
-    in the data loading phase but should be noted.
+    A further optimized feature extraction pipeline.
     """
 
     def __init__(
         self,
-        vertical_ksize=(51, 1),
-        horizontal_ksize=(1, 31),
-        intensity_std_devs=2.0,
-        area_threshold=16,
+        vertical_ksize=(5, 1),
+        horizontal_ksize=(1, 5),
+        intensity_std_devs=1.0,
+        opening_kernel_size=2,
     ):
         super().__init__()
         self.vertical_filter = MedianFilter(vertical_ksize)
         self.horizontal_filter = MedianFilter(horizontal_ksize)
         self.intensity_std_devs = intensity_std_devs
-        self.area_threshold = area_threshold
+        
+        # Register the kernel as a buffer. This automatically handles device placement.
+        self.register_buffer('opening_kernel', torch.ones(opening_kernel_size, opening_kernel_size))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # This pipeline is complex and CPU-bound due to skimage.
-        # It's kept as-is to preserve your core logic.
-        filtered_h = self.vertical_filter(x)
-        filtered_w = self.horizontal_filter(x)
+        # Add a batch dimension if it's not there for consistent processing
+        is_3d = x.dim() == 3
+        if is_3d:
+            x = x.unsqueeze(0)
+
+        # 1. Normalize the image (only once if possible)
+        x_norm = kornia.enhance.normalize_min_max(x)
+
+        # 2. Apply median filters (additive is often faster than sequential)
+        filtered_h = self.vertical_filter(x_norm)
+        filtered_w = self.horizontal_filter(x_norm)
         combined_background = filtered_h + filtered_w
+
+        # 3. Create mask and get foreground pixels directly
         mask = combined_background != 0
-        selected_pixels = torch.zeros_like(x)
-        selected_pixels[mask] = x[mask]
+        foreground_pixels = x_norm[mask]
 
-        non_zero_elements = selected_pixels[mask]
-        if non_zero_elements.numel() < 2:  # Handle cases with no/one foreground pixel
-            return torch.zeros_like(x)
+        if foreground_pixels.numel() < 2:
+            # Return a black image of the correct dimension
+            return torch.zeros_like(x.squeeze(0) if is_3d else x)
 
-        mean, std = non_zero_elements.mean(), non_zero_elements.std()
-        normalized_img = (selected_pixels - mean) / (std + 1e-8)
-        normalized_img[~mask] = 0
+        # 4. More efficient normalization and thresholding
+        mean = foreground_pixels.mean()
+        std = foreground_pixels.std()
+        
+        # Calculate threshold directly from original foreground pixels
+        # This avoids creating a large intermediate 'normalized_img' tensor
+        threshold_val = self.intensity_std_devs * std + mean
+        
+        # Create binary mask by thresholding original foreground pixels
+        # and placing them into a new mask tensor
+        binary_mask = torch.zeros_like(x_norm, dtype=torch.bool)
+        binary_mask[mask] = foreground_pixels >= threshold_val
+        binary_mask = binary_mask.to(x.dtype)
 
-        threshold_val = self.intensity_std_devs
-        normalized_img[normalized_img < threshold_val] = 0
+        # 5. Perform morphological opening
+        img_opened = kornia.morphology.opening(binary_mask, self.opening_kernel)
 
-        # The CPU-bound step
-        img_for_skimage = normalized_img.squeeze().cpu().numpy()
-        img_opened = skimage.morphology.area_opening(
-            img_for_skimage, area_threshold=self.area_threshold
-        )
+        # 6. Apply the final mask
+        # No need for a final normalization as the input is already normalized
+        final_img = x_norm * img_opened
 
-        final_tensor = torch.from_numpy(img_opened).to(x.device).unsqueeze(0)
-        return final_tensor
+        # Remove the batch dimension if we added it
+        if is_3d:
+            final_img = final_img.squeeze(0)
 
+        return final_img
 
 class UnsupervisedNPYDataset(Dataset):
     """
@@ -136,13 +156,16 @@ class UnsupervisedNPYDataset(Dataset):
         processed_views = []
         for view in views:
             # The model expects a 3-channel image, so we repeat the single channel if needed.
+            if view.ndim == 4:
+                view = view.squeeze(0)
+
             if view.shape[0] == 1:
                 if view.ndim == 2:
                     view = view.unsqueeze(0)
                 view = view.repeat(3, 1, 1)
 
             processed_view = self.processor(
-                images=view,
+                images=kornia.enhance.normalize_min_max(view),
                 return_tensors="pt",
                 do_rescale=False,  # We handle normalization manually
                 do_resize=True,  # Let the processor handle resizing to the model's expected input
@@ -185,19 +208,16 @@ class NPYDataModule(pl.LightningDataModule):
         # Define a standard augmentation pipeline using Kornia for GPU acceleration
         # This will be used for n_views - 1 views.
         standard_view_transform = nn.Sequential(
+            kornia.augmentation.Normalize(mean=0., std=1., p=1.0),
             kornia.augmentation.ColorJiggle(brightness=0.4, contrast=0.4, p=0.8),
             kornia.augmentation.RandomClahe(p=0.7),
             kornia.augmentation.RandomGaussianNoise(p=0.3),
-            # Add a slight blur to one of the views for more variety
-            kornia.augmentation.RandomGaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0), p=0.3),
+            MedianFilter(p=0.5),
         )
 
         # Add the standard pipeline for n_views - 1 views
-        for _ in range(self.hparams.n_views - 1):
+        for _ in range(self.hparams.n_views):
             self.view_pipelines.append(standard_view_transform)
-
-        # Add your custom FeatureExtractorPipeline as the last view generator
-        self.view_pipelines.append(FeatureExtractorPipeline())
 
     def setup(self, stage: str = None):
         all_files = [

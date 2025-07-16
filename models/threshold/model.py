@@ -180,14 +180,11 @@ class Threshold(nn.Module):
                 out_shape, encoder_hidden_sizes, num_classes, bilinear
             )  # Using out_shape as in_shape for decoder
         else:
-            encoder_out_channels = self.encoder.config.hidden_size * (
-                2 ** (len(self.encoder.config.depths) - 2)
-            )
 
             self.projection_head = ProjectionHead(
-                in_channels=encoder_out_channels,
+                in_channels=1024,
                 hidden_channels=256,
-                proj_out_dim=128,
+                out_channels=128,
             )
 
     def forward(self, x):
