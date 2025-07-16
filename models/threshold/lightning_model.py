@@ -196,17 +196,15 @@ class Threshold(pl.LightningModule):
         ax.set_ylabel("Principal Component 2")
         plt.tight_layout()
 
-        # Save plot to a buffer
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png")
-        buf.seek(0)
 
         # 6. Log the input image and the feature plot to Neptune
         input_grid = torchvision.utils.make_grid(image_view, normalize=True)
         self.logger.experiment["test/visualizations/input_image"].log(
             File.as_image(input_grid.detach().cpu().permute(1, 2, 0).numpy())
         )
-        self.logger.experiment["test/visualizations/feature_clusters"].log(File(buf))
+        self.logger.experiment["test/visualizations/feature_clusters"].log(
+            File.as_image(fig)
+        )
 
         # Close the plot to free up memory
         plt.close(fig)
